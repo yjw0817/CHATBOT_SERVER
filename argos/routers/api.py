@@ -415,6 +415,7 @@ def quality_gate(doc_id: str):
             })
     
     # LLM-based additional checks if available
+    llm_error_msg = None
     if is_llm_available() and len(issues) < 5:
         try:
             content = call_llm(QUALITY_GATE_PROMPT.format(sections_text=sections_text[:6000]), temperature=0.3)
@@ -423,8 +424,11 @@ def quality_gate(doc_id: str):
                 if json_match:
                     llm_issues = json.loads(json_match.group())
                     issues.extend(llm_issues[:5])  # Limit LLM issues
-        except:
-            pass
+            else:
+                llm_error_msg = "LLM 응답이 비어있습니다. (API 할당량 초과 가능성)"
+        except Exception as e:
+            llm_error_msg = f"LLM 호출 실패: {str(e)}"
+            print(f"[QUALITY_GATE] LLM error: {e}")
     
     # Clear old issues and save new
     cursor.execute("DELETE FROM qa_issues WHERE doc_id = ?", (doc_id,))
@@ -442,7 +446,14 @@ def quality_gate(doc_id: str):
     red_count = len([i for i in issues if i.get("severity") == "RED"])
     yellow_count = len([i for i in issues if i.get("severity") == "YELLOW"])
     
-    return {"success": True, "doc_id": doc_id, "red_count": red_count, "yellow_count": yellow_count, "issues": issues}
+    return {
+        "success": True, 
+        "doc_id": doc_id, 
+        "red_count": red_count, 
+        "yellow_count": yellow_count, 
+        "issues": issues,
+        "llm_error": llm_error_msg
+    }
 
 
 # ============ STEP 2: APPROVE ============
