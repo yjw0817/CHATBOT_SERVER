@@ -206,34 +206,24 @@ def extract_text(doc_id: str):
 MANUALIZE_PROMPT = """당신은 업무 문서를 구조화된 매뉴얼로 변환하는 전문가입니다.
 
 아래 원본 텍스트를 분석하여:
-1) 문서의 주제와 목적을 파악하세요.
-2) 문서 내용에 맞는 핵심 섹션 4~8개를 자동으로 도출하세요.
-3) 각 섹션에 해당하는 내용을 bullet point로 정리하세요.
+1) 문서 내용에 맞는 핵심 섹션들을 자동으로 도출하고 내용을 bullet point로 정리하세요.
+2) 문서 내에서 모호하거나, 누락되었거나, 추가 확인이 필요한 사항들을 찾아 'todo_questions'로 리스트업 하세요.
 
-규칙:
-- 없는 내용을 만들지 마세요. 원본에 없는 정보는 절대 추가하지 마세요.
-- 모호한 부분은 "확인 필요:" 라벨로 표시하세요.
-- 섹션명은 짧고 명확하게 (예: "회원관리", "권한설정", "매출/정산" 등)
-- 각 섹션 값은 bullet point("-"로 시작) 형태의 문자열로 작성하세요.
-- 원본의 핵심 정보가 빠지지 않도록 하세요.
-
-반환 형식: JSON 객체 (섹션명을 키, 내용을 값으로)
-예시:
+반환 형식: JSON 객체
 {{
-  "시스템 개요": "- 시스템 목적\\n- 주요 기능 요약",
-  "회원관리": "- 회원 등록 절차\\n- 검색 방법",
-  ...
+  "sections": {{
+    "섹션명1": "- 내용...",
+    "섹션명2": "- 내용..."
+  }},
+  "todo_questions": ["질문1", "질문2", ...]
 }}
-
-원본 텍스트:
-{raw_text}
 
 JSON만 반환하세요. 다른 텍스트 없이."""
 
 
 @router.post("/doc/{doc_id}/manualize")
 def manualize(doc_id: str, force: bool = False):
-    """Convert raw text to standardized 6-section manual using LLM."""
+    """Convert raw text to derived manual sections and generate AI todo questions."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -253,60 +243,58 @@ def manualize(doc_id: str, force: bool = False):
         cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
         existing = cursor.fetchall()
         if existing:
+            # We also need todo_questions. For now, let's assume if sections exist, we might have some stored or just return sections.
             conn.close()
             return {
                 "success": True,
                 "doc_id": doc_id,
                 "sections": [row["section_name"] for row in existing],
-                "section_details": {row["section_name"]: (row["section_text"] or "")[:300] for row in existing},
+                "section_details": {row["section_name"]: row["section_text"] for row in existing},
                 "llm_used": False,
                 "cached": True,
-                "message": "이전 매뉴얼화 결과를 불러왔습니다."
+                "todo_questions": [] # In cache mode, we skip new questions unless forced
             }
 
     # Use LLM or fallback
-    sections = {}
+    result_data = {}
     llm_error_msg = None
 
     llm_available = is_llm_available()
-    print(f"[MANUALIZE] is_llm_available() = {llm_available}")
 
     if llm_available:
         try:
             content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text[:8000]), temperature=0.3)
             if content:
-                # Extract JSON from response
                 json_match = re.search(r'\{[\s\S]*\}', content)
                 if json_match:
-                    sections = json.loads(json_match.group())
+                    result_data = json.loads(json_match.group())
             else:
-                llm_error_msg = "LLM 응답이 비어있습니다. (API 할당량 초과 또는 일시적 오류 가능성)"
+                llm_error_msg = "LLM 응답이 비어있습니다."
         except Exception as e:
-            llm_error_msg = f"LLM 호출 실패: {str(e)} (API 토큰 소진 또는 인증 오류 가능성)"
-            print(f"[MANUALIZE] LLM error: {e}")
+            llm_error_msg = f"LLM 호출 실패: {str(e)}"
+
+    sections = result_data.get("sections", {})
+    todo_questions = result_data.get("todo_questions", [])
 
     if not sections:
-        # Fallback: extract headings from document as sections
+        # Fallback: extract headings
         lines = raw_text.split("\n")
         current_section = "일반"
         section_lines = {}
         for line in lines:
             stripped = line.strip()
-            # Detect markdown headings or numbered headings
             if stripped.startswith("## ") or stripped.startswith("# "):
                 current_section = stripped.lstrip("#").strip()[:30]
-                if current_section not in section_lines:
-                    section_lines[current_section] = []
+                if current_section not in section_lines: section_lines[current_section] = []
             elif stripped:
-                if current_section not in section_lines:
-                    section_lines[current_section] = []
+                if current_section not in section_lines: section_lines[current_section] = []
                 section_lines[current_section].append(f"- {stripped}")
         for key, val_lines in section_lines.items():
-            sections[key] = "\n".join(val_lines[:20])  # Max 20 lines per section
+            sections[key] = "\n".join(val_lines[:20])
         if not sections:
             sections["전체 내용"] = raw_text[:2000]
     
-    # Delete existing sections and insert new
+    # Save sections
     cursor.execute("DELETE FROM manual_sections WHERE doc_id = ?", (doc_id,))
     for section_name, section_text in sections.items():
         section_id = f"sec_{uuid.uuid4().hex[:8]}"
@@ -323,7 +311,8 @@ def manualize(doc_id: str, force: bool = False):
         "success": True,
         "doc_id": doc_id,
         "sections": list(sections.keys()),
-        "section_details": {k: v[:300] for k, v in sections.items()},
+        "section_details": sections,
+        "todo_questions": todo_questions,
         "llm_used": bool(sections and llm_available and not llm_error_msg),
         "llm_error": llm_error_msg
     }
@@ -452,81 +441,8 @@ def quality_gate(doc_id: str):
         "red_count": red_count, 
         "yellow_count": yellow_count, 
         "issues": issues,
-        "llm_error": llm_error_msg
-    }
-
-
-# ============ STEP 2: UPGRADE DRAFT ============
-
-UPGRADE_PROMPT = """당신은 매뉴얼 고도화 전문가입니다.
-기존 매뉴얼 초안을 분석하여 더 명확하고, 전문적이며, 사용자 친화적인 언어로 가다듬어 주세요.
-
-[입력 데이터]
-{sections_json}
-
-[요구사항]
-1. 각 섹션의 내용을 더 구체적이고 체계적으로 보강하세요.
-2. 모호한 표현(상황에 따라, 협의 후 등)은 가급적 구체적인 예시나 '관리자 확인 필요' 등으로 명확히 하세요.
-3. 문서의 톤앤매너를 일관되게 유지하세요.
-4. 추가로 확인이 필요한 사항은 'todo_questions'에 리스트업 하세요.
-
-반환 형식: JSON 객체
-{{
-  "upgraded_sections": {{ "섹션명": "보강된 내용...", ... }},
-  "change_summary": "무엇이 개선되었는지 요약",
-  "todo_questions": ["질문1", "질문2"]
-}}
-
-JSON만 반환하세요."""
-
-
-@router.post("/doc/{doc_id}/upgrade-draft")
-def upgrade_draft(doc_id: str):
-    """AI-powered manual refinement."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
-    rows = cursor.fetchall()
-    if not rows:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Manualize first")
-
-    sections_json = json.dumps({row["section_name"]: row["section_text"] for row in rows}, ensure_ascii=False)
-    
-    upgraded = {}
-    if is_llm_available():
-        try:
-            content = call_llm(UPGRADE_PROMPT.format(sections_json=sections_json[:8000]), temperature=0.3)
-            if content:
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if json_match:
-                    upgraded = json.loads(json_match.group())
-        except Exception as e:
-            print(f"[UPGRADE] LLM error: {e}")
-            raise HTTPException(status_code=500, detail=f"AI 가다듬기 실패: {str(e)}")
-
-    if not upgraded:
-        conn.close()
-        raise HTTPException(status_code=500, detail="AI 가다듬기 결과를 생성할 수 없습니다.")
-
-    # Apply upgraded sections to DB
-    for name, text in upgraded.get("upgraded_sections", {}).items():
-        cursor.execute(
-            "UPDATE manual_sections SET section_text = ? WHERE doc_id = ? AND section_name = ?",
-            (text, doc_id, name)
-        )
-    
-    cursor.execute("UPDATE documents SET updated_at = ? WHERE doc_id = ?", (datetime.now().isoformat(), doc_id))
-    conn.commit()
-    conn.close()
-    
-    return {
-        "success": True,
-        "doc_id": doc_id,
-        "change_summary": upgraded.get("change_summary", ""),
-        "todo_questions": upgraded.get("todo_questions", []),
-        "sections": upgraded.get("upgraded_sections", {})
+        "llm_error": llm_error_msg,
+        "api_specs": extract_api_spec(doc_id).get("specs", [])
     }
 
 
