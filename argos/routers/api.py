@@ -206,24 +206,34 @@ def extract_text(doc_id: str):
 MANUALIZE_PROMPT = """당신은 업무 문서를 구조화된 매뉴얼로 변환하는 전문가입니다.
 
 아래 원본 텍스트를 분석하여:
-1) 문서 내용에 맞는 핵심 섹션들을 자동으로 도출하고 내용을 bullet point로 정리하세요.
-2) 문서 내에서 모호하거나, 누락되었거나, 추가 확인이 필요한 사항들을 찾아 'todo_questions'로 리스트업 하세요.
+1) 문서의 주제와 목적을 파악하세요.
+2) 문서 내용에 맞는 핵심 섹션 4~8개를 자동으로 도출하세요.
+3) 각 섹션에 해당하는 내용을 bullet point로 정리하세요.
 
-반환 형식: JSON 객체
+규칙:
+- 없는 내용을 만들지 마세요. 원본에 없는 정보는 절대 추가하지 마세요.
+- 모호한 부분은 "확인 필요:" 라벨로 표시하세요.
+- 섹션명은 짧고 명확하게 (예: "회원관리", "권한설정", "매출/정산" 등)
+- 각 섹션 값은 bullet point("-"로 시작) 형태의 문자열로 작성하세요.
+- 원본의 핵심 정보가 빠지지 않도록 하세요.
+
+반환 형식: JSON 객체 (섹션명을 키, 내용을 값으로)
+예시:
 {{
-  "sections": {{
-    "섹션명1": "- 내용...",
-    "섹션명2": "- 내용..."
-  }},
-  "todo_questions": ["질문1", "질문2", ...]
+  "시스템 개요": "- 시스템 목적\\n- 주요 기능 요약",
+  "회원관리": "- 회원 등록 절차\\n- 검색 방법",
+  ...
 }}
+
+원본 텍스트:
+{raw_text}
 
 JSON만 반환하세요. 다른 텍스트 없이."""
 
 
 @router.post("/doc/{doc_id}/manualize")
 def manualize(doc_id: str, force: bool = False):
-    """Convert raw text to derived manual sections and generate AI todo questions."""
+    """Convert raw text to derived manual sections using original prompt."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -246,7 +256,6 @@ def manualize(doc_id: str, force: bool = False):
         cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
         existing = cursor.fetchall()
         if existing:
-            # We also need todo_questions. For now, let's assume if sections exist, we might have some stored or just return sections.
             conn.close()
             return {
                 "success": True,
@@ -255,11 +264,11 @@ def manualize(doc_id: str, force: bool = False):
                 "section_details": {row["section_name"]: row["section_text"] for row in existing},
                 "llm_used": False,
                 "cached": True,
-                "todo_questions": [] # In cache mode, we skip new questions unless forced
+                "todo_questions": []
             }
 
     # Use LLM or fallback
-    result_data = {}
+    sections = {}
     llm_error_msg = None
 
     llm_available = is_llm_available()
@@ -270,14 +279,11 @@ def manualize(doc_id: str, force: bool = False):
             if content:
                 json_match = re.search(r'\{[\s\S]*\}', content)
                 if json_match:
-                    result_data = json.loads(json_match.group())
+                    sections = json.loads(json_match.group())
             else:
                 llm_error_msg = "LLM 응답이 비어있습니다."
         except Exception as e:
             llm_error_msg = f"LLM 호출 실패: {str(e)}"
-
-    sections = result_data.get("sections", {})
-    todo_questions = result_data.get("todo_questions", [])
 
     if not sections:
         # Fallback: extract headings
@@ -315,7 +321,7 @@ def manualize(doc_id: str, force: bool = False):
         "doc_id": doc_id,
         "sections": list(sections.keys()),
         "section_details": sections,
-        "todo_questions": todo_questions,
+        "todo_questions": [], # Original prompt doesn't support questions
         "llm_used": bool(sections and llm_available and not llm_error_msg),
         "llm_error": llm_error_msg
     }
