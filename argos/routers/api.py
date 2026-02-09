@@ -456,6 +456,104 @@ def quality_gate(doc_id: str):
     }
 
 
+# ============ STEP 2: UPGRADE DRAFT ============
+
+UPGRADE_PROMPT = """당신은 매뉴얼 고도화 전문가입니다.
+기존 매뉴얼 초안을 분석하여 더 명확하고, 전문적이며, 사용자 친화적인 언어로 가다듬어 주세요.
+
+[입력 데이터]
+{sections_json}
+
+[요구사항]
+1. 각 섹션의 내용을 더 구체적이고 체계적으로 보강하세요.
+2. 모호한 표현(상황에 따라, 협의 후 등)은 가급적 구체적인 예시나 '관리자 확인 필요' 등으로 명확히 하세요.
+3. 문서의 톤앤매너를 일관되게 유지하세요.
+4. 추가로 확인이 필요한 사항은 'todo_questions'에 리스트업 하세요.
+
+반환 형식: JSON 객체
+{{
+  "upgraded_sections": {{ "섹션명": "보강된 내용...", ... }},
+  "change_summary": "무엇이 개선되었는지 요약",
+  "todo_questions": ["질문1", "질문2"]
+}}
+
+JSON만 반환하세요."""
+
+
+@router.post("/doc/{doc_id}/upgrade-draft")
+def upgrade_draft(doc_id: str):
+    """AI-powered manual refinement."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
+    rows = cursor.fetchall()
+    if not rows:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Manualize first")
+
+    sections_json = json.dumps({row["section_name"]: row["section_text"] for row in rows}, ensure_ascii=False)
+    
+    upgraded = {}
+    if is_llm_available():
+        try:
+            content = call_llm(UPGRADE_PROMPT.format(sections_json=sections_json[:8000]), temperature=0.3)
+            if content:
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    upgraded = json.loads(json_match.group())
+        except Exception as e:
+            print(f"[UPGRADE] LLM error: {e}")
+            raise HTTPException(status_code=500, detail=f"AI 가다듬기 실패: {str(e)}")
+
+    if not upgraded:
+        conn.close()
+        raise HTTPException(status_code=500, detail="AI 가다듬기 결과를 생성할 수 없습니다.")
+
+    # Apply upgraded sections to DB
+    for name, text in upgraded.get("upgraded_sections", {}).items():
+        cursor.execute(
+            "UPDATE manual_sections SET section_text = ? WHERE doc_id = ? AND section_name = ?",
+            (text, doc_id, name)
+        )
+    
+    cursor.execute("UPDATE documents SET updated_at = ? WHERE doc_id = ?", (datetime.now().isoformat(), doc_id))
+    conn.commit()
+    conn.close()
+    
+    return {
+        "success": True,
+        "doc_id": doc_id,
+        "change_summary": upgraded.get("change_summary", ""),
+        "todo_questions": upgraded.get("todo_questions", []),
+        "sections": upgraded.get("upgraded_sections", {})
+    }
+
+
+# ============ STEP 2: UPDATE SECTIONS ============
+
+class SectionsUpdate(BaseModel):
+    sections: dict # {section_name: text}
+
+@router.put("/doc/{doc_id}/sections")
+def update_sections(doc_id: str, req: SectionsUpdate):
+    """Update manual sections manually."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    for name, text in req.sections.items():
+        cursor.execute(
+            "UPDATE manual_sections SET section_text = ? WHERE doc_id = ? AND section_name = ?",
+            (text, doc_id, name)
+        )
+    
+    cursor.execute("UPDATE documents SET updated_at = ? WHERE doc_id = ?", (datetime.now().isoformat(), doc_id))
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "doc_id": doc_id}
+
+
 # ============ STEP 2: APPROVE ============
 
 @router.post("/doc/{doc_id}/approve")
