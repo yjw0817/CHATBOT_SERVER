@@ -266,6 +266,7 @@ def manualize(doc_id: str, force: bool = False):
 
     # Use LLM or fallback
     sections = {}
+    llm_error_msg = None
 
     llm_available = is_llm_available()
     print(f"[MANUALIZE] is_llm_available() = {llm_available}")
@@ -278,7 +279,10 @@ def manualize(doc_id: str, force: bool = False):
                 json_match = re.search(r'\{[\s\S]*\}', content)
                 if json_match:
                     sections = json.loads(json_match.group())
+            else:
+                llm_error_msg = "LLM 응답이 비어있습니다. (API 할당량 초과 또는 일시적 오류 가능성)"
         except Exception as e:
+            llm_error_msg = f"LLM 호출 실패: {str(e)} (API 토큰 소진 또는 인증 오류 가능성)"
             print(f"[MANUALIZE] LLM error: {e}")
 
     if not sections:
@@ -320,7 +324,8 @@ def manualize(doc_id: str, force: bool = False):
         "doc_id": doc_id,
         "sections": list(sections.keys()),
         "section_details": {k: v[:300] for k, v in sections.items()},
-        "llm_used": llm_available
+        "llm_used": bool(sections and llm_available and not llm_error_msg),
+        "llm_error": llm_error_msg
     }
 
 
