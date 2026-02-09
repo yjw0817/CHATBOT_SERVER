@@ -143,8 +143,12 @@
                     () => manualize(docId, true)
                 );
             } else {
+                let msg = `섹션 ${data.sections.length}개 생성 | LLM 사용: ${data.llm_used}`;
+                if (data.llm_error) {
+                    msg += `\n⚠️ LLM 오류: ${data.llm_error}\n(규칙 기반 Fallback이 적용되었습니다.)`;
+                }
                 showModal('매뉴얼화 완료',
-                    `섹션 ${data.sections.length}개 생성 | LLM 사용: ${data.llm_used}\n${formatSections(data.section_details)}`);
+                    `${msg}\n\n${formatSections(data.section_details)}`);
             }
         } else {
             showModal('오류', data.detail || data.error);
