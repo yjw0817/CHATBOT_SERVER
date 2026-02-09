@@ -835,22 +835,20 @@ def apply_improvement(sug_id: str):
     
     # Generate patch
     patch_text = ""
-    if is_llm_available() and client:
+    if is_llm_available():
         try:
-            response = client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": PATCH_PROMPT.format(
-                    title=sug["title"],
-                    reason=sug["reason"],
-                    section_name=target_section,
-                    section_text=current_text[:2000]
-                )}],
-                temperature=0.3
+            prompt = PATCH_PROMPT.format(
+                title=sug["title"],
+                reason=sug["reason"],
+                section_name=target_section,
+                section_text=current_text[:2000]
             )
-            patch_text = response.choices[0].message.content
-        except:
+            patch_text = call_llm(prompt, temperature=0.3)
+        except Exception as e:
+            print(f"[PATCH] Error: {e}")
             patch_text = f"\n\n---FAQ---\nQ: {sug['title']}\nA: 확인 필요 - 관리자에게 문의하세요."
-    else:
+    
+    if not patch_text:
         patch_text = f"\n\n---FAQ---\nQ: {sug['title']}\nA: 확인 필요 - 관리자에게 문의하세요."
     
     # Append patch to section
@@ -919,22 +917,19 @@ def extract_api_spec(doc_id: str):
     
     specs = []
     
-    if is_llm_available() and client:
+    if is_llm_available():
         try:
-            response = client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": API_SPEC_PROMPT.format(
-                    sections_text=sections_text[:4000],
-                    api_issues=", ".join(api_issues)
-                )}],
-                temperature=0.3
+            prompt = API_SPEC_PROMPT.format(
+                sections_text=sections_text[:4000],
+                api_issues=", ".join(api_issues)
             )
-            content = response.choices[0].message.content
-            json_match = re.search(r'\[[\s\S]*\]', content)
-            if json_match:
-                specs = json.loads(json_match.group())
-        except:
-            pass
+            content = call_llm(prompt, temperature=0.3)
+            if content:
+                json_match = re.search(r'\[[\s\S]*\]', content)
+                if json_match:
+                    specs = json.loads(json_match.group())
+        except Exception as e:
+            print(f"[API_SPEC] Error: {e}")
     
     # Fallback: generate from API_NEEDED issues
     if not specs:
