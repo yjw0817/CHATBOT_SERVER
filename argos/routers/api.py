@@ -205,30 +205,163 @@ def extract_text(doc_id: str):
 
 MANUALIZE_PROMPT = """당신은 업무 문서를 구조화된 매뉴얼로 변환하는 전문가입니다.
 
-아래 원본 텍스트를 분석하여:
-1) 문서의 주제와 목적을 파악하세요.
-2) 문서 내용에 맞는 핵심 섹션 4~8개를 자동으로 도출하세요.
-3) 각 섹션에 해당하는 내용을 bullet point로 정리하세요.
+[입력]
+raw_text: {raw_text}
 
-규칙:
-- 없는 내용을 만들지 마세요. 원본에 없는 정보는 절대 추가하지 마세요.
-- 모호한 부분은 "확인 필요:" 라벨로 표시하세요.
-- 섹션명은 짧고 명확하게 (예: "회원관리", "권한설정", "매출/정산" 등)
-- 각 섹션 값은 bullet point("-"로 시작) 형태의 문자열로 작성하세요.
-- 원본의 핵심 정보가 빠지지 않도록 하세요.
+[출력 형식]
+다음과 같은 구조의 JSON 객체를 반환하십시오. 섹션 수는 문서 내용을 기반으로 AI가 적절히 결정하며, 4~8개 범위 내에서 논리적으로 묶어주세요.
 
-반환 형식: JSON 객체 (섹션명을 키, 내용을 값으로)
-예시:
 {{
-  "시스템 개요": "- 시스템 목적\\n- 주요 기능 요약",
-  "회원관리": "- 회원 등록 절차\\n- 검색 방법",
-  ...
+  "sections": [
+    {{
+      "name": "섹션 이름",
+      "content": "추출·정제한 내용 (bullet point 사용)",
+      "issues": [
+        {{
+          "type": "MISSING|AMBIGUOUS|CONFLICT|PII_RISK|API_NEEDED",
+          "message": "문제 설명",
+          "suggestion": "수정 제안"
+        }}
+      ]
+    }}
+  ],
+  "clarification_questions": ["추가 질문"],
+  "change_summary": "작업 요약"
 }}
 
-원본 텍스트:
-{raw_text}
+[지침]
+1. 섹션 분류: 문서 주제에 맞춰 4~8개로 분류.
+2. 내용 정제: 명확하고 간결하게 정리.
+3. 이슈 탐지: MISSING, AMBIGUOUS, CONFLICT, PII_RISK, API_NEEDED 탐지.
+4. 정보 유지: 없는 정보를 새로 만들지 말 것.
 
-JSON만 반환하세요. 다른 텍스트 없이."""
+JSON만 반환하세요."""
+
+
+@router.post("/doc/{doc_id}/manualize")
+def manualize(doc_id: str, force: bool = False):
+    """Convert raw text to derived manual sections using 10.md structure."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = ?", (doc_id,))
+    doc = cursor.fetchone()
+    if not doc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    raw_text = doc["raw_text"]
+    if not raw_text or raw_text.strip() == "" or raw_text.startswith("["):
+        conn.close()
+        error_msg = "추출된 텍스트가 없거나 유효하지 않습니다. 먼저 'Extract'를 수행해 주세요."
+        if raw_text and raw_text.startswith("["):
+            error_msg = f"텍스트 추출에 문제가 있습니다: {raw_text}"
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # Check if manual sections already exist (return cached if not forced)
+    if not force:
+        cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
+        existing = cursor.fetchall()
+        if existing:
+            sections = {row["section_name"]: row["section_text"] for row in existing}
+            conn.close()
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "sections": list(sections.keys()),
+                "section_details": sections,
+                "llm_used": False,
+                "cached": True,
+                "todo_questions": []
+            }
+
+    # Use LLM or fallback
+    result_data = {}
+    llm_error_msg = None
+    llm_available = is_llm_available()
+
+    if llm_available:
+        try:
+            content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text[:8000]), temperature=0.3)
+            if content:
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    result_data = json.loads(json_match.group())
+            else:
+                llm_error_msg = "LLM 응답이 비어있습니다."
+        except Exception as e:
+            llm_error_msg = f"LLM 호출 실패: {str(e)}"
+
+    sections_list = result_data.get("sections", [])
+    todo_questions = result_data.get("clarification_questions", [])
+    
+    sections_map = {}
+    all_issues = []
+
+    if sections_list:
+        for s in sections_list:
+            name = s.get("name", "미분류")
+            content = s.get("content", "")
+            sections_map[name] = content
+            
+            # Collect issues
+            for issue in s.get("issues", []):
+                all_issues.append({
+                    "severity": "RED" if issue.get("type") in ("MISSING", "CONFLICT", "PII_RISK") else "YELLOW",
+                    "issue_type": issue.get("type"),
+                    "message": f"[{name}] {issue.get('message')}",
+                    "suggestion": issue.get("suggestion")
+                })
+    else:
+        # Fallback: extract headings
+        lines = raw_text.split("\n")
+        current_section = "일반"
+        section_lines = {}
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("## ") or stripped.startswith("# "):
+                current_section = stripped.lstrip("#").strip()[:30]
+                if current_section not in section_lines: section_lines[current_section] = []
+            elif stripped:
+                if current_section not in section_lines: section_lines[current_section] = []
+                section_lines[current_section].append(f"- {stripped}")
+        for key, val_lines in section_lines.items():
+            sections_map[key] = "\n".join(val_lines[:20])
+        if not sections_map:
+            sections_map["전체 내용"] = raw_text[:2000]
+    
+    # Save sections
+    cursor.execute("DELETE FROM manual_sections WHERE doc_id = ?", (doc_id,))
+    for section_name, section_text in sections_map.items():
+        section_id = f"sec_{uuid.uuid4().hex[:8]}"
+        cursor.execute(
+            "INSERT INTO manual_sections (section_id, doc_id, section_name, section_text) VALUES (?, ?, ?, ?)",
+            (section_id, doc_id, section_name, section_text if section_text else "정보 없음")
+        )
+    
+    # Save issues found during manualization
+    cursor.execute("DELETE FROM qa_issues WHERE doc_id = ?", (doc_id,))
+    for issue in all_issues:
+        issue_id = f"issue_{uuid.uuid4().hex[:8]}"
+        cursor.execute(
+            "INSERT INTO qa_issues (issue_id, doc_id, severity, issue_type, message, suggestion, status) VALUES (?, ?, ?, ?, ?, ?, 'OPEN')",
+            (issue_id, doc_id, issue["severity"], issue["issue_type"], issue["message"], issue["suggestion"])
+        )
+    
+    cursor.execute("UPDATE documents SET updated_at = ? WHERE doc_id = ?", (datetime.now().isoformat(), doc_id))
+    conn.commit()
+    conn.close()
+    
+    return {
+        "success": True,
+        "doc_id": doc_id,
+        "sections": list(sections_map.keys()),
+        "section_details": sections_map,
+        "todo_questions": todo_questions,
+        "change_summary": result_data.get("change_summary", ""),
+        "llm_used": bool(sections_list and llm_available and not llm_error_msg),
+        "llm_error": llm_error_msg
+    }
 
 
 @router.post("/doc/{doc_id}/manualize")
