@@ -234,9 +234,12 @@ def manualize(doc_id: str, force: bool = False):
         raise HTTPException(status_code=404, detail="Document not found")
 
     raw_text = doc["raw_text"]
-    if not raw_text or raw_text.startswith("[Placeholder"):
+    if not raw_text or raw_text.strip() == "" or raw_text.startswith("["):
         conn.close()
-        raise HTTPException(status_code=400, detail="Extract text first")
+        error_msg = "추출된 텍스트가 없거나 유효하지 않습니다. 먼저 'Extract'를 수행해 주세요."
+        if raw_text and raw_text.startswith("["):
+            error_msg = f"텍스트 추출에 문제가 있습니다: {raw_text}"
+        raise HTTPException(status_code=400, detail=error_msg)
 
     # Check if manual sections already exist (return cached if not forced)
     if not force:
