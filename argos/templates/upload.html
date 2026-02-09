@@ -123,8 +123,8 @@
         if (!details) return '';
         return Object.entries(details).map(([name, text]) => {
             const preview = text.length >= 300 ? text + '...' : text;
-            return `\n【${name}】\n${preview}`;
-        }).join('\n');
+            return `【${name}】\n${preview}`;
+        }).join('\n\n');
     }
 
     async function manualize(docId, force = false) {
@@ -138,8 +138,8 @@
         if (ok) {
             if (data.cached) {
                 showConfirmModal(
-                    '기존 매뉴얼 존재',
-                    `이미 매뉴얼화된 결과가 있습니다.\n${formatSections(data.section_details)}\n\nLLM을 사용하여 다시 매뉴얼화 하시겠습니까?\n(LLM 토큰이 소모됩니다)`,
+                    '이미 매뉴얼화가 완료되었습니다',
+                    `${formatSections(data.section_details)}`,
                     () => manualize(docId, true)
                 );
             } else {
