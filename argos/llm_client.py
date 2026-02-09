@@ -65,12 +65,18 @@ def _call_openai(prompt: str, temperature: float, config: dict) -> Optional[str]
     return response.choices[0].message.content
 
 
+_GEMINI_MODEL = None
+
 def _call_gemini(prompt: str, temperature: float, config: dict) -> Optional[str]:
     """Google Gemini API call."""
     import google.generativeai as genai
-    genai.configure(api_key=config["api_key"])
-    model = genai.GenerativeModel(config["model"])
-    response = model.generate_content(
+    global _GEMINI_MODEL
+    
+    if _GEMINI_MODEL is None:
+        genai.configure(api_key=config["api_key"])
+        _GEMINI_MODEL = genai.GenerativeModel(config["model"])
+        
+    response = _GEMINI_MODEL.generate_content(
         prompt,
         generation_config=genai.types.GenerationConfig(temperature=temperature)
     )

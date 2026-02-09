@@ -111,7 +111,16 @@
         if (!force) {
             showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
         } else {
-            showModal('처리 중...', 'AI가 문서를 분석하여 매뉴얼을 생성하고 있습니다. 잠시만 기다려주세요...');
+            showModal('AI 분석 중...', `
+                <div style="text-align:center; padding: 1rem;">
+                    <div class="spinner"></div>
+                    <p><strong>AI가 문서를 정밀 분석하여 매뉴얼을 생성하고 있습니다.</strong></p>
+                    <p style="font-size:0.85rem; color:#6b7280; margin-top:0.5rem;">
+                        문서의 양에 따라 10~30초 정도 소요될 수 있습니다.<br>
+                        완료되면 자동으로 에디터가 열립니다.
+                    </p>
+                </div>
+            `);
         }
         
         const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
@@ -283,7 +292,12 @@
 
     function showModal(title, content) {
         document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-body').textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+        const body = document.getElementById('modal-body');
+        if (typeof content === 'string' && content.includes('<div')) {
+            body.innerHTML = content;
+        } else {
+            body.innerHTML = `<pre style="background:#f5f5f5;padding:1rem;border-radius:4px;white-space:pre-wrap;word-break:break-word;">${typeof content === 'string' ? content : JSON.stringify(content, null, 2)}</pre>`;
+        }
         const btnArea = document.getElementById('modal-buttons');
         btnArea.innerHTML = '';
         btnArea.style.display = 'none';
@@ -297,6 +311,7 @@
     }
 
     async function extractText(docId) {
+        showModal('텍스트 추출 중...', '<div style="text-align:center;"><div class="spinner"></div>문서에서 내용을 읽어오고 있습니다. 잠시만 기다려주세요...</div>');
         const { ok, data } = await apiCall(`/api/doc/${docId}/extract-text`);
         if (ok) {
             showModal('텍스트 추출 완료', `추출된 문자: ${data.chars}자\n\n미리보기:\n${data.preview}`);
@@ -314,7 +329,7 @@
     }
 
     async function approve(docId) {
-        showModal('RAG 데이터화 중...', '문서를 승인하고 검색 인덱스를 생성 중입니다...');
+        showModal('RAG 데이터화 중...', '<div style="text-align:center;"><div class="spinner"></div>문서를 승인하고 검색 인덱스를 생성 중입니다...</div>');
         const { ok, data } = await apiCall(`/api/doc/${docId}/approve`);
         if (ok) {
             showModal('RAG 데이터화 완료', `상태: ${data.status}\n청크 생성: ${data.reindex.chunk_count}개\n이제 챗봇에서 검색이 가능합니다.`);
@@ -322,19 +337,6 @@
         } else {
             showModal('실패', data.detail || data.error);
         }
-    }
-
-    function showConfirmModal(title, content, onConfirm) {
-        document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-body').textContent = content;
-        const btnArea = document.getElementById('modal-buttons');
-        btnArea.innerHTML = `
-            <button class="btn-small" style="background:#9ca3af;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" onclick="closeModal()">취소 (기존 유지)</button>
-            <button class="btn-small" style="background:#8b5cf6;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" id="modal-confirm-btn">다시 매뉴얼화 (LLM)</button>
-        `;
-        btnArea.style.display = 'flex';
-        document.getElementById('modal-confirm-btn').onclick = () => { closeModal(); onConfirm(); };
-        document.getElementById('result-modal').style.display = 'flex';
     }
 
     function showConfirmModal(title, content, onConfirm) {
