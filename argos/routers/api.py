@@ -554,6 +554,42 @@ def update_sections(doc_id: str, req: SectionsUpdate):
     return {"success": True, "doc_id": doc_id}
 
 
+# ============ STEP 2: AI HELPER (Refine/Fill/Recommend) ============
+
+class RefineRequest(BaseModel):
+    text: str
+    task: str  # "refine", "fill", "recommend"
+    context: Optional[str] = None # Section name or issue message
+
+REFINE_PROMPT = """당신은 매뉴얼 전문 에디터입니다. 다음 요청을 수행하세요.
+
+[요청 타입]: {task}
+[대상 텍스트]: {text}
+[추가 컨텍스트]: {context}
+
+[작업 지침]
+- "refine": 선택한 문장을 더 명확하고 전문적인 어조로 다듬어주세요.
+- "fill": 부족한 정보나 질문에 대해 보강할 수 있는 적절한 문장을 제안하세요. (모르면 '확인 필요' 명시)
+- "recommend": 해당 섹션에 어울리는 표준적인 매뉴얼 문구나 템플릿을 추천하세요.
+
+반환 형식: 제안하는 텍스트만 출력하세요. 다른 설명은 생략하세요."""
+
+@router.post("/doc/{doc_id}/refine-text")
+def refine_text(doc_id: str, req: RefineRequest):
+    """AI helper for specific editing tasks."""
+    if not is_llm_available():
+        raise HTTPException(status_code=503, detail="LLM 사용 불가")
+    
+    try:
+        suggestion = call_llm(
+            REFINE_PROMPT.format(task=req.task, text=req.text, context=req.context or ""),
+            temperature=0.3
+        )
+        return {"success": True, "suggestion": suggestion}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============ STEP 2: APPROVE ============
 
 @router.post("/doc/{doc_id}/approve")
