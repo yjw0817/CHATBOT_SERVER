@@ -79,7 +79,7 @@
     <div class="modal-content">
         <span class="close" onclick="closeModal()">&times;</span>
         <h3 id="modal-title">결과</h3>
-        <pre id="modal-body"></pre>
+        <div id="modal-body" class="argos-popup__body"></div>
         <div id="modal-buttons" style="display:none;margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;"></div>
     </div>
 </div>
@@ -95,9 +95,14 @@
         }
     }
 
-    function showModal(title, content) {
+    function showModal(title, htmlContent) {
         document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-body').textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+        const body = document.getElementById('modal-body');
+        if (typeof htmlContent === 'string' && htmlContent.startsWith('<div')) {
+            body.innerHTML = htmlContent;
+        } else {
+            body.innerHTML = `<pre class="argos-pre">${typeof htmlContent === 'string' ? htmlContent : JSON.stringify(htmlContent, null, 2)}</pre>`;
+        }
         const btnArea = document.getElementById('modal-buttons');
         btnArea.innerHTML = '';
         btnArea.style.display = 'none';
@@ -111,11 +116,28 @@
     }
 
     async function extractText(docId) {
+        showModal('텍스트 추출 중...', '<div class="argos-alert argos-alert--info">문서에서 텍스트를 추출하고 있습니다. 잠시만 기다려주세요...</div>');
         const { ok, data } = await apiCall(`/api/doc/${docId}/extract-text`);
         if (ok) {
-            showModal('텍스트 추출 완료', `추출된 문자: ${data.chars}자\n\n미리보기:\n${data.preview}`);
+            const html = `
+                <div class="argos-card">
+                    <div class="argos-title">텍스트 추출 완료</div>
+                    <p class="argos-sub">추출된 텍스트의 미리보기입니다.</p>
+                    <div class="argos-badges">
+                        <span class="argos-badge argos-badge--info">글자 수: ${data.chars.toLocaleString()}자</span>
+                    </div>
+                    <pre class="argos-pre">${data.preview}</pre>
+                </div>
+            `;
+            showModal('텍스트 추출 완료', html);
         } else {
-            showModal('오류', data.detail || data.error);
+            const errorHtml = `
+                <div class="argos-card">
+                    <div class="argos-title">오류</div>
+                    <div class="argos-alert argos-alert--error">${data.detail || data.error}</div>
+                </div>
+            `;
+            showModal('오류', errorHtml);
         }
     }
 
@@ -129,51 +151,135 @@
 
     async function manualize(docId, force = false) {
         if (!force) {
-            showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
+            showModal('확인 중...', '<div class="argos-alert argos-alert--info">기존 매뉴얼 데이터 확인 중...</div>');
         } else {
-            showModal('처리 중...', 'LLM으로 다시 매뉴얼화 중입니다. 잠시 기다려주세요...');
+            showModal('처리 중...', '<div class="argos-alert argos-alert--info">LLM으로 다시 매뉴얼화 중입니다. 잠시 기다려주세요...</div>');
         }
         const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
         const { ok, data } = await apiCall(url);
         if (ok) {
             if (data.cached) {
+                const html = `
+                    <div class="argos-card">
+                        <div class="argos-title">매뉴얼화 데이터 확인</div>
+                        <p class="argos-sub">이미 생성된 섹션 목록입니다.</p>
+                        <ul class="argos-list">
+                            ${data.sections.map(s => `<li>${s}</li>`).join('')}
+                        </ul>
+                        <div class="argos-badges">
+                            <span class="argos-badge argos-badge--info">기존 데이터 사용됨</span>
+                        </div>
+                    </div>
+                `;
                 showConfirmModal(
                     '이미 매뉴얼화가 완료되었습니다',
-                    `${formatSections(data.section_details)}`,
+                    html,
                     () => manualize(docId, true)
                 );
             } else {
-                showModal('매뉴얼화 완료',
-                    `섹션 ${data.sections.length}개 생성 | LLM 사용: ${data.llm_used}\n${formatSections(data.section_details)}`);
+                const html = `
+                    <div class="argos-card">
+                        <div class="argos-title">매뉴얼화 완료</div>
+                        <p class="argos-sub">LLM을 통해 문서를 구조화했습니다.</p>
+                        <div class="argos-badges">
+                            <span class="argos-badge argos-badge--info">섹션: ${data.sections.length}개</span>
+                            <span class="argos-badge ${data.llm_used ? 'argos-badge--ok' : 'argos-badge--yellow'}">LLM 사용: ${data.llm_used}</span>
+                        </div>
+                        <ul class="argos-list">
+                            ${data.sections.map(s => `<li>${s}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+                showModal('매뉴얼화 완료', html);
             }
         } else {
-            showModal('오류', data.detail || data.error);
+            const errorHtml = `
+                <div class="argos-card">
+                    <div class="argos-title">오류</div>
+                    <div class="argos-alert argos-alert--error">${data.detail || data.error}</div>
+                </div>
+            `;
+            showModal('오류', errorHtml);
         }
     }
 
     async function qualityGate(docId) {
-        showModal('품질 검사 중...', 'LLM과 규칙 기반으로 매뉴얼 품질을 검사하고 있습니다. 잠시만 기다려주세요...');
+        showModal('품질 검사 중...', '<div class="argos-alert argos-alert--info">LLM과 규칙 기반으로 매뉴얼 품질을 검사하고 있습니다. 잠시만 기다려주세요...</div>');
         const { ok, data } = await apiCall(`/api/doc/${docId}/quality-gate`);
         if (ok) {
-            showModal('품질 게이트 완료', `RED: ${data.red_count}, YELLOW: ${data.yellow_count}\n\n이슈:\n${JSON.stringify(data.issues, null, 2)}`);
+            const html = `
+                <div class="argos-card">
+                    <div class="argos-title">품질 검사(Gate) 결과</div>
+                    <p class="argos-sub">RED는 승인 불가, YELLOW는 개선 권고입니다.</p>
+                    <div class="argos-badges">
+                        <span class="argos-badge argos-badge--red">RED: ${data.red_count}</span>
+                        <span class="argos-badge argos-badge--yellow">YELLOW: ${data.yellow_count}</span>
+                        <span class="argos-badge ${data.red_count === 0 ? 'argos-badge--ok' : 'argos-badge--red'}">
+                            ${data.red_count === 0 ? 'Approve 가능' : 'Approve 불가'}
+                        </span>
+                    </div>
+                    ${data.issues.length > 0 ? `
+                    <ul class="argos-list">
+                        ${data.issues.map(it => `
+                            <li>
+                                <strong class="${it.severity === 'RED' ? 'text-danger' : 'text-warning'}">[${it.severity}/${it.issue_type}]</strong> 
+                                ${it.message}
+                                ${it.suggestion ? `<br><small style="color:#6b7280">💡 제안: ${it.suggestion}</small>` : ''}
+                            </li>
+                        `).join('')}
+                    </ul>
+                    ` : '<div class="argos-alert argos-alert--ok" style="margin-top:10px;">검출된 품질 이슈가 없습니다.</div>'}
+                </div>
+            `;
+            showModal('품질 게이트 완료', html);
         } else {
-            showModal('오류', data.detail || data.error);
+            const errorHtml = `
+                <div class="argos-card">
+                    <div class="argos-title">오류</div>
+                    <div class="argos-alert argos-alert--error">${data.detail || data.error}</div>
+                </div>
+            `;
+            showModal('오류', errorHtml);
         }
     }
 
     async function approve(docId) {
+        showModal('승인 중...', '<div class="argos-alert argos-alert--info">문서를 승인하고 검색 인덱스를 생성 중입니다...</div>');
         const { ok, data } = await apiCall(`/api/doc/${docId}/approve`);
         if (ok) {
-            showModal('승인 완료', `상태: ${data.status}\n청크 생성: ${data.reindex.chunk_count}개`);
-            location.reload();
+            const html = `
+                <div class="argos-card">
+                    <div class="argos-title">승인 및 인덱싱 완료</div>
+                    <p class="argos-sub">문서가 성공적으로 승인되었습니다.</p>
+                    <div class="argos-badges">
+                        <span class="argos-badge argos-badge--ok">상태: ${data.status}</span>
+                        <span class="argos-badge argos-badge--info">생성된 청크: ${data.reindex.chunk_count}개</span>
+                    </div>
+                    <div class="argos-alert argos-alert--ok" style="margin-top:10px;">이제 챗봇에서 해당 문서의 내용을 검색할 수 있습니다.</div>
+                    <button class="btn" style="width:100%;margin-top:10px;" onclick="location.reload()">확인</button>
+                </div>
+            `;
+            showModal('승인 완료', html);
         } else {
-            showModal('승인 실패', data.detail || data.error);
+            const errorHtml = `
+                <div class="argos-card">
+                    <div class="argos-title">승인 실패</div>
+                    <div class="argos-alert argos-alert--error">${data.detail || data.error}</div>
+                </div>
+            `;
+            showModal('승인 실패', errorHtml);
         }
     }
 
     function showConfirmModal(title, content, onConfirm) {
         document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-body').textContent = content;
+        const body = document.getElementById('modal-body');
+        if (typeof content === 'string' && content.startsWith('<div')) {
+            body.innerHTML = content;
+        } else {
+            body.innerHTML = `<div class="argos-card"><pre class="argos-pre">${content}</pre></div>`;
+        }
+        
         const btnArea = document.getElementById('modal-buttons');
         btnArea.innerHTML = `
             <button class="btn-small" style="background:#9ca3af;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" onclick="closeModal()">취소 (기존 유지)</button>
