@@ -152,7 +152,6 @@
     }
 
     async function qualityGate(docId) {
-        showModal('품질 검사 중...', 'LLM과 규칙 기반으로 매뉴얼 품질을 검사하고 있습니다. 잠시만 기다려주세요...');
         const { ok, data } = await apiCall(`/api/doc/${docId}/quality-gate`);
         if (ok) {
             showModal('품질 게이트 완료', `RED: ${data.red_count}, YELLOW: ${data.yellow_count}\n\n이슈:\n${JSON.stringify(data.issues, null, 2)}`);
