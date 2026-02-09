@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="upload-section">
+    <h2>📤 문서 업로드 & 매뉴얼화</h2>
+
+    <!-- Create Apartment -->
+    <div class="card">
+        <h3>아파트 추가</h3>
+        <form id="apt-form" hx-post="/api/apartments" hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) { this.reset(); location.reload(); }">
+            <input type="text" name="apt_id" placeholder="아파트 ID (예: APT001)" required>
+            <input type="text" name="name" placeholder="아파트 이름" required>
+            <button type="submit">➕ 추가</button>
+        </form>
+    </div>
+
+    <!-- Upload Document -->
+    <div class="card">
+        <h3>문서 업로드</h3>
+        <form id="upload-form" hx-post="/api/upload" hx-encoding="multipart/form-data" hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) location.reload();">
+            <select name="apt_id" required>
+                <option value="">-- 아파트 선택 --</option>
+                {% for apt in apartments %}
+                <option value="{{ apt.apt_id }}">{{ apt.name }} ({{ apt.apt_id }})</option>
+                {% endfor %}
+            </select>
+            <input type="file" name="file" accept=".docx,.pdf,.txt,.md" required>
+            <button type="submit">📁 업로드</button>
+        </form>
+    </div>
+</section>
+
+<section class="doc-list">
+    <h2>📋 문서 목록</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>아파트</th>
+                <th>문서명</th>
+                <th>버전</th>
+                <th>상태</th>
+                <th>업로드일</th>
+                <th>작업</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for doc in documents %}
+            <tr class="status-{{ doc.status|lower }}" id="row-{{ doc.doc_id }}">
+                <td>{{ doc.apt_name or doc.apt_id }}</td>
+                <td>{{ doc.title }}</td>
+                <td>v{{ doc.version }}</td>
+                <td><span class="badge badge-{{ doc.status|lower }}">{{ doc.status }}</span></td>
+                <td>{{ doc.created_at[:16] }}</td>
+                <td class="actions-cell">
+                    {% if doc.status != 'ARCHIVED' %}
+                    <button class="btn-small btn-extract" onclick="extractText('{{ doc.doc_id }}')">📄 Extract</button>
+                    <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
+                        Manualize</button>
+                    <button class="btn-small btn-gate" onclick="qualityGate('{{ doc.doc_id }}')">✅ Gate</button>
+                    <button class="btn-small btn-approve" onclick="approve('{{ doc.doc_id }}')">✔️ Approve</button>
+                    {% else %}
+                    <span class="text-muted">Archived</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="empty">업로드된 문서가 없습니다.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<!-- Result Modal -->
+<div id="result-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h3 id="modal-title">결과</h3>
+        <pre id="modal-body"></pre>
+        <div id="modal-buttons" style="display:none;margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;"></div>
+    </div>
+</div>
+
+<script>
+    async function apiCall(endpoint, method = 'POST') {
+        try {
+            const res = await fetch(endpoint, { method });
+            const data = await res.json();
+            return { ok: res.ok, data };
+        } catch (e) {
+            return { ok: false, data: { error: e.message } };
+        }
+    }
+
+    function showModal(title, content) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-body').textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+        const btnArea = document.getElementById('modal-buttons');
+        btnArea.innerHTML = '';
+        btnArea.style.display = 'none';
+        document.getElementById('result-modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+        document.getElementById('result-modal').style.display = 'none';
+        document.getElementById('modal-buttons').innerHTML = '';
+        document.getElementById('modal-buttons').style.display = 'none';
+    }
+
+    async function extractText(docId) {
+        const { ok, data } = await apiCall(`/api/doc/${docId}/extract-text`);
+        if (ok) {
+            showModal('텍스트 추출 완료', `추출된 문자: ${data.chars}자\n\n미리보기:\n${data.preview}`);
+        } else {
+            showModal('오류', data.detail || data.error);
+        }
+    }
+
+    function formatSections(details) {
+        if (!details) return '';
+        return Object.entries(details).map(([name, text]) => {
+            const preview = text.length >= 300 ? text + '...' : text;
+            return `\n【${name}】\n${preview}`;
+        }).join('\n');
+    }
+
+    async function manualize(docId, force = false) {
+        if (!force) {
+            showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
+        } else {
+            showModal('처리 중...', 'LLM으로 다시 매뉴얼화 중입니다. 잠시 기다려주세요...');
+        }
+        const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
+        const { ok, data } = await apiCall(url);
+        if (ok) {
+            if (data.cached) {
+                showConfirmModal(
+                    '기존 매뉴얼 존재',
+                    `이미 매뉴얼화된 결과가 있습니다.\n${formatSections(data.section_details)}\n\nLLM을 사용하여 다시 매뉴얼화 하시겠습니까?\n(LLM 토큰이 소모됩니다)`,
+                    () => manualize(docId, true)
+                );
+            } else {
+                showModal('매뉴얼화 완료',
+                    `섹션 ${data.sections.length}개 생성 | LLM 사용: ${data.llm_used}\n${formatSections(data.section_details)}`);
+            }
+        } else {
+            showModal('오류', data.detail || data.error);
+        }
+    }
+
+    async function qualityGate(docId) {
+        const { ok, data } = await apiCall(`/api/doc/${docId}/quality-gate`);
+        if (ok) {
+            showModal('품질 게이트 완료', `RED: ${data.red_count}, YELLOW: ${data.yellow_count}\n\n이슈:\n${JSON.stringify(data.issues, null, 2)}`);
+        } else {
+            showModal('오류', data.detail || data.error);
+        }
+    }
+
+    async function approve(docId) {
+        const { ok, data } = await apiCall(`/api/doc/${docId}/approve`);
+        if (ok) {
+            showModal('승인 완료', `상태: ${data.status}\n청크 생성: ${data.reindex.chunk_count}개`);
+            location.reload();
+        } else {
+            showModal('승인 실패', data.detail || data.error);
+        }
+    }
+
+    function showConfirmModal(title, content, onConfirm) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-body').textContent = content;
+        const btnArea = document.getElementById('modal-buttons');
+        btnArea.innerHTML = `
+            <button class="btn-small" style="background:#9ca3af;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" onclick="closeModal()">취소 (기존 유지)</button>
+            <button class="btn-small" style="background:#8b5cf6;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" id="modal-confirm-btn">다시 매뉴얼화 (LLM)</button>
+        `;
+        btnArea.style.display = 'flex';
+        document.getElementById('modal-confirm-btn').onclick = () => { closeModal(); onConfirm(); };
+        document.getElementById('result-modal').style.display = 'flex';
+    }
+
+    // Close modal on outside click
+    document.getElementById('result-modal').addEventListener('click', function (e) {
+        if (e.target === this) closeModal();
+    });
+</script>
+
+<style>
+    .modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+
+    .modal-content {
+        background: white;
+        padding: 2rem;
+        border-radius: 8px;
+        max-width: 600px;
+        width: 90%;
+        max-height: 80vh;
+        overflow: auto;
+    }
+
+    .modal-content h3 {
+        margin-top: 0;
+    }
+
+    .modal-content pre {
+        background: #f5f5f5;
+        padding: 1rem;
+        border-radius: 4px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .close {
+        float: right;
+        font-size: 1.5rem;
+        cursor: pointer;
+    }
+
+    .actions-cell {
+        white-space: nowrap;
+    }
+
+    .actions-cell button {
+        margin: 2px;
+    }
+
+    .btn-extract {
+        background: #6366f1;
+    }
+
+    .btn-manualize {
+        background: #8b5cf6;
+    }
+
+    .btn-gate {
+        background: #f59e0b;
+    }
+
+    .btn-approve {
+        background: #10b981;
+    }
+
+    .text-muted {
+        color: #9ca3af;
+    }
+</style>
+{% endblock %}

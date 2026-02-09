@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="improvements-section">
+    <h2>🔧 Improvements & API Spec</h2>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('suggestions')">📋 개선 제안</button>
+        <button class="tab-btn" onclick="showTab('apispec')">📡 API Spec</button>
+    </div>
+
+    <!-- Suggestions Tab -->
+    <div id="suggestions-tab" class="tab-content active">
+        <div class="card">
+            <h3>제안 생성</h3>
+            <div class="inline-form">
+                <select id="apt-select-sug">
+                    <option value="">-- 아파트 선택 --</option>
+                    {% for apt in apartments %}
+                    <option value="{{ apt.apt_id }}">{{ apt.name }}</option>
+                    {% endfor %}
+                </select>
+                <button onclick="generateImprovements()">🔄 Generate</button>
+            </div>
+        </div>
+
+        <h3>📋 개선 제안 목록</h3>
+        <table id="suggestions-table">
+            <thead>
+                <tr>
+                    <th>아파트</th>
+                    <th>제목</th>
+                    <th>사유</th>
+                    <th>대상 섹션</th>
+                    <th>상태</th>
+                    <th>작업</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for sug in suggestions %}
+                <tr id="sug-row-{{ sug.sug_id }}">
+                    <td>{{ sug.apt_name or sug.apt_id }}</td>
+                    <td>{{ sug.title[:40] }}...</td>
+                    <td>{{ sug.reason }}</td>
+                    <td>{{ sug.target_section_name }}</td>
+                    <td><span class="badge badge-{{ sug.status|lower }}">{{ sug.status }}</span></td>
+                    <td>
+                        {% if sug.status == 'PENDING' %}
+                        <button class="btn-small btn-approve" onclick="applySuggestion('{{ sug.sug_id }}')">✔️
+                            Apply</button>
+                        {% else %}
+                        <span class="text-muted">Applied</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty">개선 제안이 없습니다. Generate 버튼으로 생성하세요.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- API Spec Tab -->
+    <div id="apispec-tab" class="tab-content">
+        <div class="card">
+            <h3>API Spec 추출</h3>
+            <div class="inline-form">
+                <select id="doc-select-spec">
+                    <option value="">-- 문서 선택 --</option>
+                    {% for doc in documents %}
+                    <option value="{{ doc.doc_id }}">{{ doc.title }} (v{{ doc.version }})</option>
+                    {% endfor %}
+                </select>
+                <button onclick="extractApiSpec()">📡 Extract</button>
+                <button onclick="exportSpec('json')">📥 Export JSON</button>
+                <button onclick="exportSpec('yaml')">📥 Export YAML</button>
+            </div>
+        </div>
+
+        <h3>📡 API Spec</h3>
+        <table id="apispec-table">
+            <thead>
+                <tr>
+                    <th>Intent</th>
+                    <th>Endpoint</th>
+                    <th>Method</th>
+                    <th>Request Fields</th>
+                    <th>Response Fields</th>
+                    <th>Auth</th>
+                </tr>
+            </thead>
+            <tbody id="apispec-tbody">
+                {% for spec in api_specs %}
+                <tr>
+                    <td>{{ spec.intent }}</td>
+                    <td><code>{{ spec.endpoint }}</code></td>
+                    <td><span class="badge badge-pending">{{ spec.method }}</span></td>
+                    <td>{{ spec.req_fields_json }}</td>
+                    <td>{{ spec.resp_fields_json }}</td>
+                    <td>{{ spec.auth }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty">API Spec이 없습니다. Extract 버튼으로 추출하세요.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div id="export-result" class="card" style="display:none; margin-top:1rem;">
+            <h4>Export Result</h4>
+            <pre id="export-content"></pre>
+        </div>
+    </div>
+</section>
+
+<script>
+    function showTab(tabName) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(tabName + '-tab').classList.add('active');
+        event.target.classList.add('active');
+    }
+
+    async function generateImprovements() {
+        const aptId = document.getElementById('apt-select-sug').value;
+        if (!aptId) {
+            alert('아파트를 선택하세요');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/improvements/generate?apt_id=${aptId}`, { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                alert(`${data.count}개의 개선 제안이 생성되었습니다.`);
+                location.reload();
+            } else {
+                alert('생성 실패');
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    async function applySuggestion(sugId) {
+        try {
+            const res = await fetch(`/api/improvements/${sugId}/apply`, { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                alert(`적용 완료! Reindexed: ${data.reindexed.chunk_count} chunks`);
+                location.reload();
+            } else {
+                alert('적용 실패: ' + (data.detail || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    async function extractApiSpec() {
+        const docId = document.getElementById('doc-select-spec').value;
+        if (!docId) {
+            alert('문서를 선택하세요');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/doc/${docId}/extract-api-spec`, { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                alert(`${data.spec_count}개의 API Spec이 추출되었습니다.`);
+                // Update table
+                const tbody = document.getElementById('apispec-tbody');
+                tbody.innerHTML = data.specs.map(spec => `
+                <tr>
+                    <td>${spec.intent_name}</td>
+                    <td><code>${spec.endpoint}</code></td>
+                    <td><span class="badge badge-pending">${spec.method}</span></td>
+                    <td>${JSON.stringify(spec.request_fields)}</td>
+                    <td>${JSON.stringify(spec.response_fields)}</td>
+                    <td>${spec.auth}</td>
+                </tr>
+            `).join('');
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    async function exportSpec(format) {
+        const docId = document.getElementById('doc-select-spec').value;
+        if (!docId) {
+            alert('문서를 선택하세요');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/doc/${docId}/api-spec/export?format=${format}`);
+            const data = await res.json();
+
+            const resultDiv = document.getElementById('export-result');
+            const contentPre = document.getElementById('export-content');
+
+            if (format === 'yaml') {
+                contentPre.textContent = data.content;
+            } else {
+                contentPre.textContent = JSON.stringify(data.specs, null, 2);
+            }
+            resultDiv.style.display = 'block';
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+</script>
+
+<style>
+    .inline-form {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    code {
+        background: #f3f4f6;
+        padding: 0.2rem 0.4rem;
+        border-radius: 3px;
+        font-size: 0.85rem;
+    }
+
+    #export-content {
+        max-height: 400px;
+        overflow: auto;
+        background: #1f2937;
+        color: #10b981;
+        padding: 1rem;
+        border-radius: 6px;
+    }
+</style>
+{% endblock %}

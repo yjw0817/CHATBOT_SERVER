@@ -1,0 +1,305 @@
+/* Argos Apartment AI - Styles */
+
+:root {
+    --primary: #4f46e5;
+    --primary-dark: #4338ca;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-600: #4b5563;
+    --gray-800: #1f2937;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--gray-100);
+    color: var(--gray-800);
+    line-height: 1.6;
+}
+
+header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    padding: 1rem 2rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+header h1 {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+nav {
+    display: flex;
+    gap: 1rem;
+}
+
+nav a {
+    color: rgba(255,255,255,0.8);
+    text-decoration: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+nav a:hover, nav a.active {
+    background: rgba(255,255,255,0.2);
+    color: white;
+}
+
+main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.card h3 {
+    margin-bottom: 1rem;
+    color: var(--gray-800);
+}
+
+form {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+input, select {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--gray-300);
+    border-radius: 6px;
+    font-size: 0.9rem;
+}
+
+input:focus, select:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+button {
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+}
+
+button:hover:not(:disabled) {
+    background: var(--primary-dark);
+}
+
+button:disabled {
+    background: var(--gray-300);
+    cursor: not-allowed;
+}
+
+.btn-small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+.btn-primary {
+    background: var(--primary);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+th, td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--gray-200);
+}
+
+th {
+    background: var(--gray-50);
+    font-weight: 600;
+    color: var(--gray-600);
+}
+
+tr:hover {
+    background: var(--gray-50);
+}
+
+.empty {
+    text-align: center;
+    color: var(--gray-600);
+    padding: 2rem !important;
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge-draft { background: var(--gray-200); color: var(--gray-600); }
+.badge-approved { background: #d1fae5; color: #065f46; }
+.badge-archived { background: #fef3c7; color: #92400e; }
+.badge-pending { background: #dbeafe; color: #1e40af; }
+.badge-applied { background: #d1fae5; color: #065f46; }
+
+.status-archived { opacity: 0.6; }
+
+/* Quality Gate */
+.issue-card.red { border-left: 4px solid var(--danger); }
+.issue-card.yellow { border-left: 4px solid var(--warning); }
+
+.issues-container {
+    display: grid;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.issue-card ul {
+    margin-left: 1.5rem;
+}
+
+.issue-card li {
+    margin-bottom: 0.75rem;
+}
+
+/* Chat */
+.chat-container {
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.messages {
+    height: 400px;
+    overflow-y: auto;
+    padding: 1rem;
+}
+
+.message {
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    max-width: 80%;
+}
+
+.message.system {
+    background: var(--gray-100);
+    color: var(--gray-600);
+    text-align: center;
+    max-width: 100%;
+}
+
+.message.user {
+    background: var(--primary);
+    color: white;
+    margin-left: auto;
+}
+
+.message.assistant {
+    background: var(--gray-100);
+}
+
+.chat-input {
+    display: flex;
+    border-top: 1px solid var(--gray-200);
+    padding: 1rem;
+}
+
+.chat-input input {
+    flex: 1;
+}
+
+.chat-controls {
+    margin-bottom: 1rem;
+}
+
+.chat-info, .info {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #fef3c7;
+    border-radius: 6px;
+    color: #92400e;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.tab-btn {
+    background: var(--gray-200);
+    color: var(--gray-600);
+}
+
+.tab-btn.active {
+    background: var(--primary);
+    color: white;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.export-buttons {
+    margin-bottom: 1rem;
+}
+
+footer {
+    text-align: center;
+    padding: 1rem;
+    color: var(--gray-600);
+    font-size: 0.9rem;
+}
+
+.description {
+    color: var(--gray-600);
+    margin-bottom: 1rem;
+}
+
+.actions {
+    margin-top: 1rem;
+}
+
+.actions small {
+    margin-left: 1rem;
+    color: var(--gray-600);
+}
+
+h2 {
+    margin-bottom: 1rem;
+}

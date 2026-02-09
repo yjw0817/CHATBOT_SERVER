@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="chat-section">
+    <h2>💬 Chat with Citations</h2>
+
+    <div class="chat-controls">
+        <select id="apt-select">
+            <option value="">-- 아파트 선택 --</option>
+            {% for apt in apartments %}
+            <option value="{{ apt.apt_id }}">{{ apt.name }} ({{ apt.apt_id }})</option>
+            {% endfor %}
+        </select>
+        <span id="status-badge" class="badge" style="display:none;"></span>
+    </div>
+
+    <div class="chat-container">
+        <div id="chat-messages" class="messages">
+            <div class="message system">
+                아파트를 선택하고 질문을 입력하세요.
+            </div>
+        </div>
+
+        <form id="chat-form" class="chat-input" onsubmit="sendMessage(event)">
+            <input type="text" id="chat-input" placeholder="질문을 입력하세요... (예: 환불 규정 알려줘)" disabled>
+            <button type="submit" id="send-btn" disabled>전송</button>
+        </form>
+    </div>
+</section>
+
+<script>
+    let currentAptId = null;
+    let conversationId = null;
+
+    document.getElementById('apt-select').addEventListener('change', function () {
+        currentAptId = this.value;
+        const input = document.getElementById('chat-input');
+        const btn = document.getElementById('send-btn');
+        if (currentAptId) {
+            input.disabled = false;
+            btn.disabled = false;
+            conversationId = null; // Reset conversation
+            document.getElementById('chat-messages').innerHTML = '<div class="message system">질문을 입력하세요.</div>';
+        } else {
+            input.disabled = true;
+            btn.disabled = true;
+        }
+    });
+
+    async function sendMessage(e) {
+        e.preventDefault();
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        if (!message || !currentAptId) return;
+
+        // Add user message
+        addMessage('user', message);
+        input.value = '';
+
+        // Show loading
+        const loadingDiv = addMessage('assistant', '답변 생성 중...');
+
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    apt_id: currentAptId,
+                    client_id: 'web-user',
+                    conversation_id: conversationId,
+                    message: message
+                })
+            });
+            const data = await res.json();
+
+            // Update conversation ID
+            conversationId = data.conversation_id;
+
+            // Remove loading and add real response
+            loadingDiv.remove();
+            addAssistantMessage(data);
+
+        } catch (err) {
+            loadingDiv.innerHTML = '오류가 발생했습니다: ' + err.message;
+        }
+    }
+
+    function addMessage(role, text) {
+        const messagesDiv = document.getElementById('chat-messages');
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${role}`;
+        msgDiv.textContent = text;
+        messagesDiv.appendChild(msgDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        return msgDiv;
+    }
+
+    function addAssistantMessage(data) {
+        const messagesDiv = document.getElementById('chat-messages');
+
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'message assistant';
+
+        // Confidence badge
+        const confidenceClass = data.confidence === 'HIGH' ? 'badge-approved' :
+            data.confidence === 'MED' ? 'badge-pending' : 'badge-draft';
+
+        let html = `<div class="reply-header">
+        <span class="badge ${confidenceClass}">${data.confidence}</span>
+    </div>
+    <div class="reply-text">${data.reply_text}</div>`;
+
+        // Citations
+        if (data.citations && data.citations.length > 0) {
+            html += '<div class="citations"><strong>📚 출처:</strong><ul>';
+            for (const cite of data.citations) {
+                html += `<li>
+                <strong>${cite.doc_title || '문서'}</strong> > ${cite.section_name}
+                <br><small class="snippet">"${cite.snippet}"</small>
+            </li>`;
+            }
+            html += '</ul></div>';
+        }
+
+        // Next question
+        if (data.next_question) {
+            html += `<div class="next-question">💡 ${data.next_question}</div>`;
+        }
+
+        msgDiv.innerHTML = html;
+        messagesDiv.appendChild(msgDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+</script>
+
+<style>
+    .reply-header {
+        margin-bottom: 0.5rem;
+    }
+
+    .reply-text {
+        margin-bottom: 0.75rem;
+    }
+
+    .citations {
+        background: #f3f4f6;
+        padding: 0.75rem;
+        border-radius: 6px;
+        margin-top: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .citations ul {
+        margin: 0.5rem 0 0 1.5rem;
+        padding: 0;
+    }
+
+    .citations li {
+        margin-bottom: 0.5rem;
+    }
+
+    .snippet {
+        color: #6b7280;
+        font-style: italic;
+    }
+
+    .next-question {
+        margin-top: 0.5rem;
+        padding: 0.5rem;
+        background: #fef3c7;
+        border-radius: 4px;
+        font-size: 0.9rem;
+    }
+
+    .message.assistant {
+        max-width: 90%;
+    }
+</style>
+{% endblock %}

@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="quality-section">
+    <h2>✅ Quality Gate</h2>
+    <p class="description">문서 품질 검증 결과 (누락/모호/충돌/개인정보/API 필요 항목)</p>
+
+    <!-- Document selector -->
+    <div class="card">
+        <h3>문서 선택</h3>
+        <select id="doc-select" onchange="loadIssues()">
+            <option value="">-- 문서 선택 --</option>
+            {% for doc in documents %}
+            <option value="{{ doc.doc_id }}">{{ doc.title }} (v{{ doc.version }}) - {{ doc.status }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn-small" onclick="runQualityGate()">🔄 Quality Gate 실행</button>
+    </div>
+
+    <div class="issues-container">
+        {% set red_issues = issues | selectattr('severity', 'equalto', 'RED') | list %}
+        {% set yellow_issues = issues | selectattr('severity', 'equalto', 'YELLOW') | list %}
+
+        <div class="card issue-card red">
+            <h3>🔴 RED Issues (<span id="red-count">{{ red_issues|length }}</span>)</h3>
+            <div id="red-issues-list">
+                {% if red_issues %}
+                <ul>
+                    {% for issue in red_issues %}
+                    <li>
+                        <strong>[{{ issue.issue_type }}]</strong> {{ issue.message }}
+                        <br><small>제안: {{ issue.suggestion }}</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="empty">RED 이슈 없음</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card issue-card yellow">
+            <h3>🟡 YELLOW Issues (<span id="yellow-count">{{ yellow_issues|length }}</span>)</h3>
+            <div id="yellow-issues-list">
+                {% if yellow_issues %}
+                <ul>
+                    {% for issue in yellow_issues %}
+                    <li>
+                        <strong>[{{ issue.issue_type }}]</strong> {{ issue.message }}
+                        <br><small>제안: {{ issue.suggestion }}</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="empty">YELLOW 이슈 없음</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="btn-primary" id="approve-btn" onclick="approveDoc()" disabled>✔️ 승인 (Approve)</button>
+        <small>* RED 이슈가 모두 해결되어야 승인 가능</small>
+    </div>
+</section>
+
+<script>
+    let currentDocId = null;
+
+    async function loadIssues() {
+        const select = document.getElementById('doc-select');
+        currentDocId = select.value;
+        if (!currentDocId) return;
+
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/issues`);
+            const issues = await res.json();
+
+            const red = issues.filter(i => i.severity === 'RED');
+            const yellow = issues.filter(i => i.severity === 'YELLOW');
+
+            document.getElementById('red-count').textContent = red.length;
+            document.getElementById('yellow-count').textContent = yellow.length;
+
+            document.getElementById('red-issues-list').innerHTML = red.length
+                ? '<ul>' + red.map(i => `<li><strong>[${i.issue_type}]</strong> ${i.message}<br><small>제안: ${i.suggestion}</small></li>`).join('') + '</ul>'
+                : '<p class="empty">RED 이슈 없음</p>';
+
+            document.getElementById('yellow-issues-list').innerHTML = yellow.length
+                ? '<ul>' + yellow.map(i => `<li><strong>[${i.issue_type}]</strong> ${i.message}<br><small>제안: ${i.suggestion}</small></li>`).join('') + '</ul>'
+                : '<p class="empty">YELLOW 이슈 없음</p>';
+
+            document.getElementById('approve-btn').disabled = red.length > 0;
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function runQualityGate() {
+        if (!currentDocId) {
+            alert('문서를 선택하세요');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/quality-gate`, { method: 'POST' });
+            const data = await res.json();
+
+            if (res.ok) {
+                alert(`Quality Gate 완료!\nRED: ${data.red_count}, YELLOW: ${data.yellow_count}`);
+                loadIssues();
+            } else {
+                alert('오류: ' + (data.detail || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    async function approveDoc() {
+        if (!currentDocId) return;
+
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/approve`, { method: 'POST' });
+            const data = await res.json();
+
+            if (res.ok) {
+                alert(`승인 완료! 청크 ${data.reindex.chunk_count}개 생성됨`);
+                location.reload();
+            } else {
+                alert('승인 실패: ' + (data.detail || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+</script>
+{% endblock %}

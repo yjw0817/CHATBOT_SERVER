@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Argos Apartment AI</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <header>
+        <h1>🏢 Argos Apartment AI</h1>
+        <nav>
+            <a href="/ui/upload" class="{% if active_tab == 'upload' %}active{% endif %}">📤 Upload</a>
+            <a href="/ui/quality" class="{% if active_tab == 'quality' %}active{% endif %}">✅ Quality Gate</a>
+            <a href="/ui/chat" class="{% if active_tab == 'chat' %}active{% endif %}">💬 Chat</a>
+            <a href="/ui/improvements" class="{% if active_tab == 'improvements' %}active{% endif %}">🔧 Improvements</a>
+        </nav>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <p>Argos Demo v0.1</p>
+    </footer>
+</body>
+</html>
