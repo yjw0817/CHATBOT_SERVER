@@ -138,6 +138,18 @@
         const container = document.getElementById('editor-container');
         container.innerHTML = '';
 
+        // Add LLM Error if any (e.g., token exhaustion)
+        if (data.llm_error) {
+            const errDiv = document.createElement('div');
+            errDiv.className = 'info';
+            errDiv.style.background = '#fef2f2';
+            errDiv.style.color = '#991b1b';
+            errDiv.style.border = '1px solid #fecaca';
+            errDiv.style.marginBottom = '1rem';
+            errDiv.innerHTML = `<strong>⚠️ LLM 사용 불가: ${data.llm_error}</strong><br><small>규칙 기반 알고리즘으로 매뉴얼 초안을 생성했습니다. 내용을 검토해 주세요.</small>`;
+            container.appendChild(errDiv);
+        }
+
         if (data.todo_questions && data.todo_questions.length > 0) {
             const todoDiv = document.createElement('div');
             todoDiv.className = 'info';
