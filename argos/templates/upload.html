@@ -58,10 +58,8 @@
                     <button class="btn-small btn-extract" onclick="extractText('{{ doc.doc_id }}')">📄 Extract</button>
                     <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
                         Manualize</button>
-                    <button class="btn-small" style="background:#ec4899;color:white;" onclick="upgradeDraft('{{ doc.doc_id }}')">✨ Upgrade</button>
-                    <button class="btn-small" style="background:#3b82f6;color:white;" onclick="openEditor('{{ doc.doc_id }}')">✍️ Edit</button>
                     <button class="btn-small btn-gate" onclick="qualityGate('{{ doc.doc_id }}')">✅ Gate</button>
-                    <button class="btn-small btn-approve" onclick="approve('{{ doc.doc_id }}')">✔️ Approve</button>
+                    <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}" onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
                     {% else %}
                     <span class="text-muted">Archived</span>
                     {% endif %}
@@ -108,46 +106,98 @@
 <script>
     let currentDocId = null;
 
-    async function upgradeDraft(docId) {
-        showModal('AI 가다듬기 중...', 'AI가 매뉴얼 초안을 더 전문적으로 가다듬고 있습니다. 잠시만 기다려주세요...');
-        const res = await fetch(`/api/doc/${docId}/upgrade-draft`, { method: 'POST' });
-        const data = await res.json();
+    async function manualize(docId, force = false) {
+        currentDocId = docId;
+        if (!force) {
+            showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
+        } else {
+            showModal('처리 중...', 'AI가 문서를 분석하여 매뉴얼을 생성하고 있습니다. 잠시만 기다려주세요...');
+        }
         
-        if (res.ok) {
-            const htmlText = `✨ AI 가다듬기 완료\n\n[개선 요약]\n${data.change_summary}\n\n[추가 확인 필요 사항]\n${data.todo_questions.map(q => `- ${q}`).join('\n')}\n\n에디터를 열어 내용을 확인해 보세요.`;
-            showModal('가다듬기 완료', htmlText);
+        const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
+        const { ok, data } = await apiCall(url);
+        
+        if (ok) {
+            if (data.cached && !force) {
+                showConfirmModal(
+                    '이미 매뉴얼화가 완료되었습니다',
+                    `섹션 목록: ${data.sections.join(', ')}`,
+                    () => manualize(docId, true)
+                );
+            } else {
+                openEditorWithData(docId, data);
+                closeModal();
+            }
         } else {
             showModal('오류', data.detail || data.error);
         }
     }
 
-    async function openEditor(docId) {
+    function openEditorWithData(docId, data) {
         currentDocId = docId;
-        const res = await fetch(`/api/doc/${docId}/sections`);
-        const sections = await res.json();
-        
         const container = document.getElementById('editor-container');
         container.innerHTML = '';
+
+        if (data.todo_questions && data.todo_questions.length > 0) {
+            const todoDiv = document.createElement('div');
+            todoDiv.className = 'info';
+            todoDiv.style.marginBottom = '1rem';
+            todoDiv.innerHTML = `<strong>📌 AI 보강 요청사항</strong><ul style="margin-left:1.5rem;margin-top:0.5rem;">${data.todo_questions.map(q => `<li>${q}</li>`).join('')}</ul>`;
+            container.appendChild(todoDiv);
+        }
         
-        sections.forEach(sec => {
+        Object.entries(data.section_details).forEach(([name, text]) => {
             const secDiv = document.createElement('div');
             secDiv.className = 'card';
             secDiv.style.margin = '0';
             secDiv.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                    <strong>${sec.section_name}</strong>
+                    <strong>${name}</strong>
                     <div style="display:flex; gap:0.25rem;">
-                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine('${sec.section_name}', 'refine')">🪄 다듬기</button>
-                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine('${sec.section_name}', 'fill')">➕ 보강</button>
-                        <button class="btn-small" style="background:#8b5cf6;color:white;" onclick="aiRefine('${sec.section_name}', 'recommend')">💡 추천</button>
+                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine('${name}', 'refine')">🪄 다듬기</button>
+                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine('${name}', 'fill')">➕ 보강</button>
                     </div>
                 </div>
-                <textarea id="editor-${sec.section_name}" style="width:100%; height:150px; padding:10px; border-radius:6px; border:1px solid #d1d5db; font-family:inherit; font-size:14px; resize:vertical;">${sec.section_text}</textarea>
+                <textarea id="editor-${name}" style="width:100%; height:120px; padding:10px; border-radius:6px; border:1px solid #d1d5db; font-family:inherit; font-size:14px; resize:vertical;">${text}</textarea>
             `;
             container.appendChild(secDiv);
         });
 
         document.getElementById('editor-modal').style.display = 'flex';
+    }
+
+    async function openEditor(docId) {
+        const res = await fetch(`/api/doc/${docId}/sections`);
+        const sections = await res.json();
+        const details = {};
+        sections.forEach(s => details[s.section_name] = s.section_text);
+        openEditorWithData(docId, { section_details: details, todo_questions: [] });
+    }
+
+    async function qualityGate(docId) {
+        showModal('품질 검사 및 API 추출 중...', '매뉴얼 품질을 검증하고 시스템 연동을 위한 API 스펙을 추출하고 있습니다...');
+        const { ok, data } = await apiCall(`/api/doc/${docId}/quality-gate`);
+        if (ok) {
+            let apiHtml = '';
+            if (data.api_specs && data.api_specs.length > 0) {
+                apiHtml = `\n\n[추출된 API 목록]\n` + data.api_specs.map(s => `- ${s.intent}: ${s.method} ${s.endpoint}`).join('\n');
+            }
+            showModal('검증 및 추출 완료', `RED: ${data.red_count}, YELLOW: ${data.yellow_count}\n\n이슈:\n${JSON.stringify(data.issues, null, 2)}${apiHtml}`);
+            
+            const approveBtn = document.getElementById(`approve-btn-${docId}`);
+            if (approveBtn) {
+                approveBtn.disabled = data.red_count > 0;
+                if (data.red_count > 0) {
+                    approveBtn.style.opacity = '0.5';
+                    approveBtn.title = "RED 이슈를 해결해야 RAG 데이터화가 가능합니다.";
+                } else {
+                    approveBtn.style.opacity = '1';
+                    approveBtn.title = "";
+                }
+            }
+        } else {
+            showModal('오류', data.detail || data.error);
+        }
     }
 
     function closeEditor() {
@@ -157,7 +207,6 @@
     async function aiRefine(sectionName, task) {
         const textarea = document.getElementById(`editor-${sectionName}`);
         const currentText = textarea.value;
-        
         const originalText = textarea.value;
         textarea.value = "AI가 작성 중입니다...";
         textarea.disabled = true;
@@ -209,6 +258,7 @@
         await saveEditor();
         qualityGate(currentDocId);
     }
+
     async function apiCall(endpoint, method = 'POST') {
         try {
             const res = await fetch(endpoint, { method });
@@ -251,56 +301,28 @@
         }).join('\n\n');
     }
 
-    async function manualize(docId, force = false) {
-        if (!force) {
-            showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
-        } else {
-            showModal('처리 중...', 'LLM으로 다시 매뉴얼화 중입니다. 잠시 기다려주세요...');
-        }
-        const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
-        const { ok, data } = await apiCall(url);
-        if (ok) {
-            if (data.cached) {
-                showConfirmModal(
-                    '이미 매뉴얼화가 완료되었습니다',
-                    `${formatSections(data.section_details)}`,
-                    () => manualize(docId, true)
-                );
-            } else {
-                let msg = `섹션 ${data.sections.length}개 생성 | LLM 사용: ${data.llm_used}`;
-                if (data.llm_error) {
-                    msg += `\n⚠️ LLM 오류: ${data.llm_error}\n(규칙 기반 Fallback이 적용되었습니다.)`;
-                }
-                showModal('매뉴얼화 완료',
-                    `${msg}\n\n${formatSections(data.section_details)}`);
-            }
-        } else {
-            showModal('오류', data.detail || data.error);
-        }
-    }
-
-    async function qualityGate(docId) {
-        showModal('품질 검사 중...', 'LLM과 규칙 기반으로 매뉴얼 품질을 검사하고 있습니다. 잠시만 기다려주세요...');
-        const { ok, data } = await apiCall(`/api/doc/${docId}/quality-gate`);
-        if (ok) {
-            let msg = `RED: ${data.red_count}, YELLOW: ${data.yellow_count}`;
-            if (data.llm_error) {
-                msg += `\n⚠️ LLM 오류: ${data.llm_error}\n(규칙 기반 검사 결과만 표시됩니다.)`;
-            }
-            showModal('품질 게이트 완료', `${msg}\n\n이슈:\n${JSON.stringify(data.issues, null, 2)}`);
-        } else {
-            showModal('오류', data.detail || data.error);
-        }
-    }
-
     async function approve(docId) {
+        showModal('RAG 데이터화 중...', '문서를 승인하고 검색 인덱스를 생성 중입니다...');
         const { ok, data } = await apiCall(`/api/doc/${docId}/approve`);
         if (ok) {
-            showModal('승인 완료', `상태: ${data.status}\n청크 생성: ${data.reindex.chunk_count}개`);
+            showModal('RAG 데이터화 완료', `상태: ${data.status}\n청크 생성: ${data.reindex.chunk_count}개\n이제 챗봇에서 검색이 가능합니다.`);
             location.reload();
         } else {
-            showModal('승인 실패', data.detail || data.error);
+            showModal('실패', data.detail || data.error);
         }
+    }
+
+    function showConfirmModal(title, content, onConfirm) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-body').textContent = content;
+        const btnArea = document.getElementById('modal-buttons');
+        btnArea.innerHTML = `
+            <button class="btn-small" style="background:#9ca3af;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" onclick="closeModal()">취소 (기존 유지)</button>
+            <button class="btn-small" style="background:#8b5cf6;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;" id="modal-confirm-btn">다시 매뉴얼화 (LLM)</button>
+        `;
+        btnArea.style.display = 'flex';
+        document.getElementById('modal-confirm-btn').onclick = () => { closeModal(); onConfirm(); };
+        document.getElementById('result-modal').style.display = 'flex';
     }
 
     function showConfirmModal(title, content, onConfirm) {
