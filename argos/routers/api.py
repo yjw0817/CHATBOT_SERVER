@@ -112,7 +112,7 @@ async def upload_document(
         new_version = (row["max_ver"] or 0) + 1
     
     doc_id = f"doc_{uuid.uuid4().hex[:12]}"
-    file_path = UPLOAD_DIR / f"{doc_id}.{ext}"
+    file_path = UPLOAD_DIR / f"{doc_id}.{source_type}"
     with open(file_path, "wb") as f:
         f.write(content)
     
