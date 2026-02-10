@@ -623,12 +623,21 @@ REFINE_PROMPT = """당신은 매뉴얼 전문 에디터입니다. 다음 요청�
 
 [요청 타입]: {task}
 [대상 텍스트]: {text}
-[추가 컨텍스트]: {context}
+[추가 컨텍스트(섹션명)]: {context}
+
+[원본 문서 참고 내용]:
+{raw_text}
 
 [작업 지침]
-- "refine": 선택한 문장을 더 명확하고 전문적인 어조로 다듬어주세요.
-- "fill": 부족한 정보나 질문에 대해 보강할 수 있는 적절한 문장을 제안하세요. (모르면 '확인 필요' 명시)
+- "refine": 선택한 문장을 더 명확하고 전문적인 어조로 다듬어주세요. 원본 문서의 의미를 변경하지 마세요.
+- "fill": 부족한 정보를 **반드시 원본 문서에 있는 내용만** 활용하여 보강하세요.
 - "recommend": 해당 섹션에 어울리는 표준적인 매뉴얼 문구나 템플릿을 추천하세요.
+
+[필수 규칙 - 반드시 준수]
+1. 원본 문서에 없는 정보를 절대 만들어 넣지 마세요. (환불율, 기간, 금액 등 수치를 추측 금지)
+2. 원본에서 근거를 찾을 수 없는 내용은 반드시 "[확인 필요]" 라벨을 붙이세요.
+3. 모호하거나 불확실한 사항은 "[확인 필요: 구체적인 기준 필요]" 형태로 명시하세요.
+4. 원본 문서의 사실과 다른 내용을 생성하면 안 됩니다.
 
 반환 형식: 제안하는 텍스트만 출력하세요. 다른 설명은 생략하세요."""
 
@@ -638,9 +647,26 @@ def refine_text(doc_id: str, req: RefineRequest):
     if not is_llm_available():
         raise HTTPException(status_code=503, detail="LLM 사용 불가")
     
+    # Fetch original document raw_text for reference
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = ?", (doc_id,))
+    doc = cursor.fetchone()
+    conn.close()
+    
+    raw_text = ""
+    if doc and doc["raw_text"]:
+        # Limit raw_text to prevent token overflow (use first 4000 chars)
+        raw_text = doc["raw_text"][:4000]
+    
     try:
         suggestion = call_llm(
-            REFINE_PROMPT.format(task=req.task, text=req.text, context=req.context or ""),
+            REFINE_PROMPT.format(
+                task=req.task,
+                text=req.text,
+                context=req.context or "",
+                raw_text=raw_text or "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
+            ),
             temperature=0.3
         )
         return {"success": True, "suggestion": suggestion}
