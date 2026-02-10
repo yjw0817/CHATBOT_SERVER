@@ -226,7 +226,9 @@
             container.appendChild(todoDiv);
         }
 
+        let sectionIndex = 0;
         Object.entries(data.section_details).forEach(([name, text]) => {
+            const idx = sectionIndex++;
             const secDiv = document.createElement('div');
             secDiv.className = 'card';
             secDiv.style.margin = '0';
@@ -234,11 +236,11 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                     <strong>${name}</strong>
                     <div style="display:flex; gap:0.25rem;">
-                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine('${name}', 'refine')">🪄 RAG 최적화</button>
-                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine('${name}', 'fill')">➕ 맥락 보강</button>
+                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">🪄 RAG 최적화</button>
+                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine(${idx}, 'fill')">➕ 맥락 보강</button>
                     </div>
                 </div>
-                <textarea id="editor-${name}" class="editor-textarea" oninput="autoResize(this)">${text}</textarea>
+                <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" oninput="autoResize(this)">${text}</textarea>
             `;
             container.appendChild(secDiv);
         });
@@ -289,15 +291,16 @@
         document.getElementById('editor-modal').style.display = 'none';
     }
 
-    let compareTargetSection = null;
+    let compareTargetIdx = null;
 
     function autoResize(el) {
         el.style.height = 'auto';
         el.style.height = el.scrollHeight + 'px';
     }
 
-    async function aiRefine(sectionName, task) {
-        const textarea = document.getElementById(`editor-${sectionName}`);
+    async function aiRefine(idx, task) {
+        const textarea = document.getElementById(`editor-${idx}`);
+        const sectionName = textarea.dataset.sectionName;
         const originalText = textarea.value;
         textarea.value = "AI가 작성 중입니다...";
         textarea.disabled = true;
@@ -315,14 +318,14 @@
         autoResize(textarea);
 
         if (res.ok) {
-            openCompare(sectionName, originalText, result.suggestion, task);
+            openCompare(idx, sectionName, originalText, result.suggestion, task);
         } else {
             alert(result.detail || "AI 요청 실패");
         }
     }
 
-    function openCompare(sectionName, before, after, task) {
-        compareTargetSection = sectionName;
+    function openCompare(idx, sectionName, before, after, task) {
+        compareTargetIdx = idx;
         const taskLabel = task === 'refine' ? '🪄 RAG 최적화' : '➕ 맥락 보강';
         document.getElementById('compare-title').textContent = `🔄 ${taskLabel} 비교 — ${sectionName}`;
         document.getElementById('compare-before').textContent = before;
@@ -337,12 +340,12 @@
 
     function closeCompare() {
         document.getElementById('compare-modal').style.display = 'none';
-        compareTargetSection = null;
+        compareTargetIdx = null;
     }
 
     function applyCompare() {
-        if (!compareTargetSection) return;
-        const textarea = document.getElementById(`editor-${compareTargetSection}`);
+        if (compareTargetIdx === null) return;
+        const textarea = document.getElementById(`editor-${compareTargetIdx}`);
         textarea.value = document.getElementById('compare-after').value;
         autoResize(textarea);
         closeCompare();
@@ -350,11 +353,11 @@
 
     async function saveEditor() {
         const container = document.getElementById('editor-container');
-        const textareas = container.querySelectorAll('textarea');
+        const textareas = container.querySelectorAll('textarea.editor-textarea');
         const sections = {};
         textareas.forEach(ta => {
-            const name = ta.id.replace('editor-', '');
-            sections[name] = ta.value;
+            const name = ta.dataset.sectionName;
+            if (name) sections[name] = ta.value;
         });
 
         const res = await fetch(`/api/doc/${currentDocId}/sections`, {
