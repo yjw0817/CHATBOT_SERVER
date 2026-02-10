@@ -36,6 +36,12 @@ def upload_page(request: Request):
     """)
     documents = [dict(row) for row in cursor.fetchall()]
     
+    # Check which documents have existing manual sections
+    cursor.execute("SELECT DISTINCT doc_id FROM manual_sections")
+    docs_with_manual = {row["doc_id"] for row in cursor.fetchall()}
+    for doc in documents:
+        doc["has_manual"] = doc["doc_id"] in docs_with_manual
+    
     conn.close()
     
     return templates.TemplateResponse("upload.html", {

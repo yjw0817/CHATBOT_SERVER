@@ -56,10 +56,16 @@
                 <td class="actions-cell">
                     {% if doc.status != 'ARCHIVED' %}
                     <button class="btn-small btn-extract" onclick="extractText('{{ doc.doc_id }}')">📄 Extract</button>
+                    {% if doc.has_manual %}
+                    <button class="btn-small btn-view-manual" onclick="openEditor('{{ doc.doc_id }}')">📖 매뉴얼
+                        보기</button>
+                    {% else %}
                     <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
                         Manualize</button>
+                    {% endif %}
                     <button class="btn-small btn-gate" onclick="qualityGate('{{ doc.doc_id }}')">✅ Gate</button>
-                    <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}" onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
+                    <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}"
+                        onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
                     {% else %}
                     <span class="text-muted">Archived</span>
                     {% endif %}
@@ -80,7 +86,8 @@
         <span class="close" onclick="closeModal()">&times;</span>
         <h3 id="modal-title">결과</h3>
         <pre id="modal-body"></pre>
-        <div id="modal-buttons" style="display:none;margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;"></div>
+        <div id="modal-buttons" style="display:none;margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;">
+        </div>
     </div>
 </div>
 
@@ -90,12 +97,13 @@
         <span class="close" onclick="closeEditor()">&times;</span>
         <h3>✍️ 매뉴얼 에디터</h3>
         <p class="text-muted" style="margin-bottom:1rem;">내용을 직접 수정하거나 AI의 도움을 받아 보강할 수 있습니다.</p>
-        
+
         <div id="editor-container" style="display: flex; flex-direction: column; gap: 1.5rem;">
             <!-- Sections will be injected here -->
         </div>
 
-        <div style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 0.5rem; border-top: 1px solid #eee; padding-top: 1rem;">
+        <div
+            style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 0.5rem; border-top: 1px solid #eee; padding-top: 1rem;">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
             <button class="btn" style="background:#f59e0b;" onclick="revalidateEditor()">🔍 AI 재검증 (Gate)</button>
             <button id="save-editor-btn" class="btn" onclick="saveEditor()">💾 저장하기</button>
@@ -122,10 +130,10 @@
                 </div>
             `);
         }
-        
+
         const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
         const { ok, data } = await apiCall(url);
-        
+
         if (ok) {
             if (data.cached && !force) {
                 showConfirmModalForCache(
@@ -194,7 +202,7 @@
             todoDiv.innerHTML = `<strong>📌 AI 보강 요청사항</strong><ul style="margin-left:1.5rem;margin-top:0.5rem;">${data.todo_questions.map(q => `<li>${q}</li>`).join('')}</ul>`;
             container.appendChild(todoDiv);
         }
-        
+
         Object.entries(data.section_details).forEach(([name, text]) => {
             const secDiv = document.createElement('div');
             secDiv.className = 'card';
@@ -232,7 +240,7 @@
                 apiHtml = `\n\n[추출된 API 목록]\n` + data.api_specs.map(s => `- ${s.intent}: ${s.method} ${s.endpoint}`).join('\n');
             }
             showModal('검증 및 추출 완료', `RED: ${data.red_count}, YELLOW: ${data.yellow_count}\n\n이슈:\n${JSON.stringify(data.issues, null, 2)}${apiHtml}`);
-            
+
             const approveBtn = document.getElementById(`approve-btn-${docId}`);
             if (approveBtn) {
                 approveBtn.disabled = data.red_count > 0;
@@ -266,7 +274,7 @@
             body: JSON.stringify({ text: currentText, task: task, context: sectionName })
         });
         const result = await res.json();
-        
+
         textarea.disabled = false;
         if (res.ok) {
             if (confirm(`AI 제안을 적용하시겠습니까?\n\n[제안 내용]\n${result.suggestion}`)) {
@@ -443,6 +451,10 @@
 
     .btn-manualize {
         background: #8b5cf6;
+    }
+
+    .btn-view-manual {
+        background: #3b82f6;
     }
 
     .btn-gate {
