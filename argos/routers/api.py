@@ -203,44 +203,98 @@ def extract_text(doc_id: str):
 
 # ============ STEP 2: MANUALIZE ============
 
-MANUALIZE_PROMPT = """당신은 업무 문서를 구조화된 매뉴얼로 변환하는 전문가입니다.
+MANUALIZE_PROMPT = """당신은 영업/운영 문서를 **RAG(검색 기반 답변)**에 넣기 적합한 **구조화 매뉴얼 데이터**로 변환하는 전문가입니다.
+
+[목표]
+- 원문(raw_text)을 **정확히 보존**하면서도, 검색/인용/검증/업데이트가 쉬운 형태로 **정제된 매뉴얼 JSON**을 만듭니다.
+- 원문에 없는 정보를 **추가/추측/창작하지 않습니다.**
+- 개인정보(PII)는 **탐지 + 마스킹**하여 RAG에 안전하게 저장 가능하게 만듭니다.
 
 [입력]
 raw_text: {raw_text}
 
 [출력 형식]
-다음과 같은 구조의 JSON 객체를 반환하십시오. 섹션 수는 문서 내용을 기반으로 AI가 적절히 결정하며, 4~8개 범위 내에서 논리적으로 묶어주세요.
+- 아래 스키마를 만족하는 **RFC8259 유효 JSON**만 반환하세요.
+- 코드블록(```), 주석, 설명 문장 금지. **오직 JSON 텍스트만** 출력.
 
 {{
+  "doc_title": "문서 제목(원문에서 추출, 없으면 빈 문자열)",
+  "doc_type": "POLICY|PROCESS|FAQ|NOTICE|MIXED",
+  "summary": "문서 핵심 2~4줄 요약(추측 금지)",
   "sections": [
     {{
+      "section_id": "stable_slug_like_this",
       "name": "섹션 이름",
-      "content": "추출·정제한 내용 (bullet point 사용)",
-      "issues": [
+      "tags": ["키워드", "업무영역", "대상"],
+      "content": [
         {{
-          "type": "MISSING|AMBIGUOUS|CONFLICT|PII_RISK|API_NEEDED",
-          "message": "문제 설명",
-          "suggestion": "수정 제안"
+          "rule_id": "S1-R1",
+          "title": "항목 제목(짧게)",
+          "bullets": [
+            "규칙/절차를 짧은 bullet로 정리",
+            "조건/대상/절차/예외가 드러나게 작성"
+          ],
+          "structured": {{
+            "target": "대상(있으면)",
+            "condition": "적용 조건(있으면)",
+            "procedure": ["절차 1", "절차 2"],
+            "exceptions": ["예외 1"],
+            "owner": "담당/주체(있으면)",
+            "channel": "문의/접수 채널(있으면)"
+          }},
+          "source_quotes": [
+            "원문 근거를 1~2개 짧게 인용(각 50자 내외, 그대로 복사)"
+          ],
+          "issues": [
+            {{
+              "type": "MISSING|AMBIGUOUS|CONFLICT|PII_RISK|API_NEEDED",
+              "severity": "LOW|MEDIUM|HIGH",
+              "message": "문제 설명",
+              "suggestion": "수정/보강 제안"
+            }}
+          ]
         }}
       ]
     }}
   ],
-  "clarification_questions": ["추가 질문"],
+  "clarification_questions": ["확인 필요 질문"],
+  "pii_handling": {{
+    "pii_found": false,
+    "pii_types": [],
+    "masking_policy": []
+  }},
   "change_summary": "작업 요약"
 }}
 
-[지침]
-1. 섹션 분류: 문서 주제에 맞춰 4~8개로 분류.
-2. 내용 정제: 명확하고 간결하게 정리.
-3. 이슈 탐지: MISSING, AMBIGUOUS, CONFLICT, PII_RISK, API_NEEDED 탐지.
-4. 정보 유지: 없는 정보를 새로 만들지 말 것.
+[섹션 구성 규칙]
+1) 섹션 수는 문서 내용 기반으로 **4~8개**로 논리적으로 묶습니다.
+2) 섹션 이름은 안정적으로: 예) 운영시간/휴무, 예약/취소, 이용/입장, 결제/환불, 예외/문의, 권한/담당
+3) section_id는 섹션명 기반의 안정 slug(영문 소문자 + 하이픈). 예: "refund-policy"
 
-JSON만 반환하세요."""
+[정제 규칙]
+- 원문 표현을 과도하게 미화/확장하지 말고, **짧고 명확한 규칙 형태**로 정리합니다.
+- 각 rule은 검색에 잘 걸리도록 **핵심 명사/동사**를 bullets에 포함합니다.
+- 절차는 가능하면 단계형으로 structured.procedure에 넣습니다.
+
+[이슈 탐지 규칙]
+- MISSING: 필수 정보 누락(기한/금액/담당/채널/조건 등)
+- AMBIGUOUS: 해석이 갈리는 표현("적당히", "빠르게", "가능하면" 등)
+- CONFLICT: 문서 내 상충 규칙/예외 충돌
+- PII_RISK: 개인정보/식별정보 포함
+- API_NEEDED: 시스템 자동화 필요하나 API 미명시
+
+[PII 처리 규칙(중요)]
+- 원문에 PII가 있으면 content/quotes에는 **마스킹된 형태로만** 남기고 issues에 PII_RISK 기록.
+- PII가 없으면 pii_found=false, pii_types=[]로 반환.
+
+[금지]
+- 원문에 없는 정보 생성/추측 금지
+- JSON 외 텍스트 출력 금지"""
 
 
 @router.post("/doc/{doc_id}/manualize")
 def manualize(doc_id: str, force: bool = False):
-    """Convert raw text to derived manual sections using 10.md structure."""
+    """Convert raw text to structured manual sections using V2 RAG-optimized prompt."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -301,17 +355,71 @@ def manualize(doc_id: str, force: bool = False):
     if sections_list:
         for s in sections_list:
             name = s.get("name", "미분류")
-            content = s.get("content", "")
-            sections_map[name] = content
+            content_items = s.get("content", "")
             
-            # Collect issues
-            for issue in s.get("issues", []):
-                all_issues.append({
-                    "severity": "RED" if issue.get("type") in ("MISSING", "CONFLICT", "PII_RISK") else "YELLOW",
-                    "issue_type": issue.get("type"),
-                    "message": f"[{name}] {issue.get('message')}",
-                    "suggestion": issue.get("suggestion")
-                })
+            # V2: content is array of rule objects → flatten to readable text
+            if isinstance(content_items, list):
+                text_parts = []
+                for rule in content_items:
+                    title = rule.get("title", "")
+                    if title:
+                        text_parts.append(f"### {title}")
+                    
+                    # Bullets
+                    for bullet in rule.get("bullets", []):
+                        text_parts.append(f"- {bullet}")
+                    
+                    # Structured info
+                    structured = rule.get("structured", {})
+                    if structured:
+                        details = []
+                        if structured.get("target"):
+                            details.append(f"- 대상: {structured['target']}")
+                        if structured.get("condition"):
+                            details.append(f"- 조건: {structured['condition']}")
+                        if structured.get("procedure"):
+                            for i, step in enumerate(structured["procedure"], 1):
+                                details.append(f"  {i}. {step}")
+                        if structured.get("exceptions"):
+                            for exc in structured["exceptions"]:
+                                details.append(f"- ⚠️ 예외: {exc}")
+                        if structured.get("owner"):
+                            details.append(f"- 담당: {structured['owner']}")
+                        if structured.get("channel"):
+                            details.append(f"- 채널: {structured['channel']}")
+                        if details:
+                            text_parts.extend(details)
+                    
+                    # Source quotes
+                    quotes = rule.get("source_quotes", [])
+                    if quotes:
+                        text_parts.append(f"  📌 근거: {'; '.join(quotes)}")
+                    
+                    text_parts.append("")  # blank line between rules
+                    
+                    # Collect issues from each rule
+                    for issue in rule.get("issues", []):
+                        severity_map = {"HIGH": "RED", "MEDIUM": "YELLOW", "LOW": "YELLOW"}
+                        all_issues.append({
+                            "severity": severity_map.get(issue.get("severity", "MEDIUM"), "YELLOW"),
+                            "issue_type": issue.get("type"),
+                            "message": f"[{name}] {issue.get('message', '')}",
+                            "suggestion": issue.get("suggestion", "")
+                        })
+                
+                sections_map[name] = "\n".join(text_parts).strip()
+            else:
+                # V1 fallback: content is plain string
+                sections_map[name] = content_items if content_items else "정보 없음"
+                
+                # V1 issues at section level
+                for issue in s.get("issues", []):
+                    all_issues.append({
+                        "severity": "RED" if issue.get("type") in ("MISSING", "CONFLICT", "PII_RISK") else "YELLOW",
+                        "issue_type": issue.get("type"),
+                        "message": f"[{name}] {issue.get('message')}",
+                        "suggestion": issue.get("suggestion")
+                    })
     else:
         # Fallback: extract headings
         lines = raw_text.split("\n")
@@ -359,103 +467,8 @@ def manualize(doc_id: str, force: bool = False):
         "section_details": sections_map,
         "todo_questions": todo_questions,
         "change_summary": result_data.get("change_summary", ""),
+        "pii_handling": result_data.get("pii_handling", {}),
         "llm_used": bool(sections_list and llm_available and not llm_error_msg),
-        "llm_error": llm_error_msg
-    }
-
-
-@router.post("/doc/{doc_id}/manualize")
-def manualize(doc_id: str, force: bool = False):
-    """Convert raw text to derived manual sections using original prompt."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = ?", (doc_id,))
-    doc = cursor.fetchone()
-    if not doc:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    raw_text = doc["raw_text"]
-    if not raw_text or raw_text.strip() == "" or raw_text.startswith("["):
-        conn.close()
-        error_msg = "추출된 텍스트가 없거나 유효하지 않습니다. 먼저 'Extract'를 수행해 주세요."
-        if raw_text and raw_text.startswith("["):
-            error_msg = f"텍스트 추출에 문제가 있습니다: {raw_text}"
-        raise HTTPException(status_code=400, detail=error_msg)
-
-    # Check if manual sections already exist (return cached if not forced)
-    if not force:
-        cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
-        existing = cursor.fetchall()
-        if existing:
-            conn.close()
-            return {
-                "success": True,
-                "doc_id": doc_id,
-                "sections": [row["section_name"] for row in existing],
-                "section_details": {row["section_name"]: row["section_text"] for row in existing},
-                "llm_used": False,
-                "cached": True,
-                "todo_questions": []
-            }
-
-    # Use LLM or fallback
-    sections = {}
-    llm_error_msg = None
-
-    llm_available = is_llm_available()
-
-    if llm_available:
-        try:
-            content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text[:8000]), temperature=0.3)
-            if content:
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if json_match:
-                    sections = json.loads(json_match.group())
-            else:
-                llm_error_msg = "LLM 응답이 비어있습니다."
-        except Exception as e:
-            llm_error_msg = f"LLM 호출 실패: {str(e)}"
-
-    if not sections:
-        # Fallback: extract headings
-        lines = raw_text.split("\n")
-        current_section = "일반"
-        section_lines = {}
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("## ") or stripped.startswith("# "):
-                current_section = stripped.lstrip("#").strip()[:30]
-                if current_section not in section_lines: section_lines[current_section] = []
-            elif stripped:
-                if current_section not in section_lines: section_lines[current_section] = []
-                section_lines[current_section].append(f"- {stripped}")
-        for key, val_lines in section_lines.items():
-            sections[key] = "\n".join(val_lines[:20])
-        if not sections:
-            sections["전체 내용"] = raw_text[:2000]
-    
-    # Save sections
-    cursor.execute("DELETE FROM manual_sections WHERE doc_id = ?", (doc_id,))
-    for section_name, section_text in sections.items():
-        section_id = f"sec_{uuid.uuid4().hex[:8]}"
-        cursor.execute(
-            "INSERT INTO manual_sections (section_id, doc_id, section_name, section_text) VALUES (?, ?, ?, ?)",
-            (section_id, doc_id, section_name, section_text if section_text else "정보 없음")
-        )
-    
-    cursor.execute("UPDATE documents SET updated_at = ? WHERE doc_id = ?", (datetime.now().isoformat(), doc_id))
-    conn.commit()
-    conn.close()
-    
-    return {
-        "success": True,
-        "doc_id": doc_id,
-        "sections": list(sections.keys()),
-        "section_details": sections,
-        "todo_questions": [], # Original prompt doesn't support questions
-        "llm_used": bool(sections and llm_available and not llm_error_msg),
         "llm_error": llm_error_msg
     }
 
