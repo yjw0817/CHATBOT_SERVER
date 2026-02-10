@@ -343,12 +343,13 @@
         compareTargetIdx = null;
     }
 
-    function applyCompare() {
+    async function applyCompare() {
         if (compareTargetIdx === null) return;
         const textarea = document.getElementById(`editor-${compareTargetIdx}`);
         textarea.value = document.getElementById('compare-after').value;
         autoResize(textarea);
         closeCompare();
+        await saveEditor();
     }
 
     async function saveEditor() {
