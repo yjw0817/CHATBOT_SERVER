@@ -105,7 +105,7 @@
         <div
             style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 0.5rem; border-top: 1px solid #eee; padding-top: 1rem;">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
-            <button class="btn" style="background:#f59e0b;" onclick="manualize(currentDocId, true)">🔄 다시
+            <button class="btn" style="background:#f59e0b;" onclick="closeEditor(); manualize(currentDocId, true)">🔄 다시
                 Manualize</button>
             <button id="save-editor-btn" class="btn" onclick="saveEditor()">💾 저장하기</button>
         </div>
