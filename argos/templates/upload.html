@@ -235,9 +235,10 @@
             secDiv.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                     <strong>${name}</strong>
-                    <div style="display:flex; gap:0.25rem;">
-                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">🪄 RAG 최적화</button>
-                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine(${idx}, 'fill')">➕ 맥락 보강</button>
+                    <div style="display:flex; gap:0.25rem; align-items:center;">
+                        <span id="step1-done-${idx}" style="display:none; color:#10b981; font-weight:700; font-size:13px;">✅</span>
+                        <button id="btn-fill-${idx}" class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
+                        <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white; opacity:0.5;" onclick="aiRefine(${idx}, 'refine')" disabled>② RAG 최적화</button>
                     </div>
                 </div>
                 <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" oninput="autoResize(this)">${text}</textarea>
@@ -292,6 +293,7 @@
     }
 
     let compareTargetIdx = null;
+    let compareTargetTask = null;
 
     function autoResize(el) {
         el.style.height = 'auto';
@@ -326,7 +328,8 @@
 
     function openCompare(idx, sectionName, before, after, task) {
         compareTargetIdx = idx;
-        const taskLabel = task === 'refine' ? '🪄 RAG 최적화' : '➕ 맥락 보강';
+        compareTargetTask = task;
+        const taskLabel = task === 'refine' ? '② RAG 최적화' : '① 맥락 보강';
         document.getElementById('compare-title').textContent = `🔄 ${taskLabel} 비교 — ${sectionName}`;
         document.getElementById('compare-before').textContent = before;
         const afterTA = document.getElementById('compare-after');
@@ -341,15 +344,29 @@
     function closeCompare() {
         document.getElementById('compare-modal').style.display = 'none';
         compareTargetIdx = null;
+        compareTargetTask = null;
     }
 
     async function applyCompare() {
         if (compareTargetIdx === null) return;
-        const textarea = document.getElementById(`editor-${compareTargetIdx}`);
+        const idx = compareTargetIdx;
+        const task = compareTargetTask;
+        const textarea = document.getElementById(`editor-${idx}`);
         textarea.value = document.getElementById('compare-after').value;
         autoResize(textarea);
         closeCompare();
         await saveEditor();
+
+        // Mark step 1 done and enable step 2
+        if (task === 'fill') {
+            const doneEl = document.getElementById(`step1-done-${idx}`);
+            if (doneEl) doneEl.style.display = 'inline';
+            const refineBtn = document.getElementById(`btn-refine-${idx}`);
+            if (refineBtn) {
+                refineBtn.disabled = false;
+                refineBtn.style.opacity = '1';
+            }
+        }
     }
 
     async function saveEditor() {
