@@ -59,8 +59,6 @@
                     {% if doc.has_manual %}
                     <button class="btn-small btn-view-manual" onclick="openEditor('{{ doc.doc_id }}')">📖 매뉴얼
                         보기</button>
-                    <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}', true)">🔄 다시
-                        Manualize</button>
                     {% else %}
                     <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
                         Manualize</button>
