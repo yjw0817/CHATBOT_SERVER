@@ -234,8 +234,8 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                     <strong>${name}</strong>
                     <div style="display:flex; gap:0.25rem;">
-                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine('${name}', 'refine')">🪄 다듬기</button>
-                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine('${name}', 'fill')">➕ 보강</button>
+                        <button class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine('${name}', 'refine')">🪄 RAG 최적화</button>
+                        <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine('${name}', 'fill')">➕ 맥락 보강</button>
                     </div>
                 </div>
                 <textarea id="editor-${name}" class="editor-textarea" oninput="autoResize(this)">${text}</textarea>
@@ -323,7 +323,7 @@
 
     function openCompare(sectionName, before, after, task) {
         compareTargetSection = sectionName;
-        const taskLabel = task === 'refine' ? '🪄 다듬기' : '➕ 보강';
+        const taskLabel = task === 'refine' ? '🪄 RAG 최적화' : '➕ 맥락 보강';
         document.getElementById('compare-title').textContent = `🔄 ${taskLabel} 비교 — ${sectionName}`;
         document.getElementById('compare-before').textContent = before;
         const afterTA = document.getElementById('compare-after');
