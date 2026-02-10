@@ -59,6 +59,8 @@
                     {% if doc.has_manual %}
                     <button class="btn-small btn-view-manual" onclick="openEditor('{{ doc.doc_id }}')">📖 매뉴얼
                         보기</button>
+                    <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}', true)">🔄 다시
+                        Manualize</button>
                     {% else %}
                     <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
                         Manualize</button>
@@ -105,7 +107,8 @@
         <div
             style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 0.5rem; border-top: 1px solid #eee; padding-top: 1rem;">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
-            <button class="btn" style="background:#f59e0b;" onclick="revalidateEditor()">🔍 AI 재검증 (Gate)</button>
+            <button class="btn" style="background:#f59e0b;" onclick="manualize(currentDocId, true)">🔄 다시
+                Manualize</button>
             <button id="save-editor-btn" class="btn" onclick="saveEditor()">💾 저장하기</button>
         </div>
     </div>
