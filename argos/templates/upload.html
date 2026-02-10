@@ -111,6 +111,29 @@
     </div>
 </div>
 
+<!-- Comparison Modal -->
+<div id="compare-modal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width: 1100px; width: 95%;">
+        <span class="close" onclick="closeCompare()">&times;</span>
+        <h3 id="compare-title">🔄 AI 제안 비교</h3>
+        <p class="text-muted" style="margin-bottom:1rem;">왼쪽이 현재 내용, 오른쪽이 AI 제안입니다. 오른쪽을 수정한 뒤 적용할 수 있습니다.</p>
+        <div class="compare-container">
+            <div class="compare-panel">
+                <div class="compare-label">📄 현재 (Before)</div>
+                <div id="compare-before" class="compare-text"></div>
+            </div>
+            <div class="compare-panel">
+                <div class="compare-label">✨ AI 제안 (After)</div>
+                <textarea id="compare-after" class="compare-textarea"></textarea>
+            </div>
+        </div>
+        <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 0.5rem;">
+            <button class="btn" style="background:#9ca3af;" onclick="closeCompare()">❌ 취소 (원래 유지)</button>
+            <button class="btn" style="background:#3b82f6;" onclick="applyCompare()">✅ 적용하기</button>
+        </div>
+    </div>
+</div>
+
 <script>
     let currentDocId = null;
 
@@ -215,12 +238,17 @@
                         <button class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine('${name}', 'fill')">➕ 보강</button>
                     </div>
                 </div>
-                <textarea id="editor-${name}" style="width:100%; height:120px; padding:10px; border-radius:6px; border:1px solid #d1d5db; font-family:inherit; font-size:14px; resize:vertical;">${text}</textarea>
+                <textarea id="editor-${name}" class="editor-textarea" oninput="autoResize(this)">${text}</textarea>
             `;
             container.appendChild(secDiv);
         });
 
         document.getElementById('editor-modal').style.display = 'flex';
+
+        // Auto-resize all textareas after rendering
+        requestAnimationFrame(() => {
+            container.querySelectorAll('.editor-textarea').forEach(ta => autoResize(ta));
+        });
     }
 
     async function openEditor(docId) {
@@ -261,31 +289,63 @@
         document.getElementById('editor-modal').style.display = 'none';
     }
 
+    let compareTargetSection = null;
+
+    function autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    }
+
     async function aiRefine(sectionName, task) {
         const textarea = document.getElementById(`editor-${sectionName}`);
-        const currentText = textarea.value;
         const originalText = textarea.value;
         textarea.value = "AI가 작성 중입니다...";
         textarea.disabled = true;
+        autoResize(textarea);
 
         const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: currentText, task: task, context: sectionName })
+            body: JSON.stringify({ text: originalText, task: task, context: sectionName })
         });
         const result = await res.json();
 
         textarea.disabled = false;
+        textarea.value = originalText;
+        autoResize(textarea);
+
         if (res.ok) {
-            if (confirm(`AI 제안을 적용하시겠습니까?\n\n[제안 내용]\n${result.suggestion}`)) {
-                textarea.value = result.suggestion;
-            } else {
-                textarea.value = originalText;
-            }
+            openCompare(sectionName, originalText, result.suggestion, task);
         } else {
             alert(result.detail || "AI 요청 실패");
-            textarea.value = originalText;
         }
+    }
+
+    function openCompare(sectionName, before, after, task) {
+        compareTargetSection = sectionName;
+        const taskLabel = task === 'refine' ? '🪄 다듬기' : '➕ 보강';
+        document.getElementById('compare-title').textContent = `🔄 ${taskLabel} 비교 — ${sectionName}`;
+        document.getElementById('compare-before').textContent = before;
+        const afterTA = document.getElementById('compare-after');
+        afterTA.value = after;
+        document.getElementById('compare-modal').style.display = 'flex';
+        requestAnimationFrame(() => {
+            afterTA.style.height = 'auto';
+            afterTA.style.height = afterTA.scrollHeight + 'px';
+        });
+    }
+
+    function closeCompare() {
+        document.getElementById('compare-modal').style.display = 'none';
+        compareTargetSection = null;
+    }
+
+    function applyCompare() {
+        if (!compareTargetSection) return;
+        const textarea = document.getElementById(`editor-${compareTargetSection}`);
+        textarea.value = document.getElementById('compare-after').value;
+        autoResize(textarea);
+        closeCompare();
     }
 
     async function saveEditor() {
@@ -467,6 +527,89 @@
 
     .text-muted {
         color: #9ca3af;
+    }
+
+    /* Auto-expand textareas */
+    .editor-textarea {
+        width: 100%;
+        min-height: 80px;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #d1d5db;
+        font-family: inherit;
+        font-size: 14px;
+        resize: vertical;
+        overflow: hidden;
+        line-height: 1.6;
+        box-sizing: border-box;
+    }
+
+    /* Comparison modal styles */
+    .compare-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .compare-panel {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .compare-label {
+        font-weight: 600;
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+        padding: 6px 12px;
+        border-radius: 6px 6px 0 0;
+    }
+
+    .compare-panel:first-child .compare-label {
+        background: #fef2f2;
+        color: #991b1b;
+    }
+
+    .compare-panel:last-child .compare-label {
+        background: #f0fdf4;
+        color: #166534;
+    }
+
+    .compare-text {
+        background: #fafafa;
+        border: 1px solid #e5e7eb;
+        border-radius: 0 0 6px 6px;
+        padding: 12px;
+        font-size: 14px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+        flex: 1;
+        color: #374151;
+    }
+
+    .compare-textarea {
+        border: 1px solid #86efac;
+        border-radius: 0 0 6px 6px;
+        padding: 12px;
+        font-size: 14px;
+        line-height: 1.6;
+        font-family: inherit;
+        resize: vertical;
+        min-height: 120px;
+        flex: 1;
+        box-sizing: border-box;
+    }
+
+    .compare-textarea:focus {
+        outline: none;
+        border-color: #22c55e;
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+    }
+
+    @media (max-width: 768px) {
+        .compare-container {
+            grid-template-columns: 1fr;
+        }
     }
 </style>
 {% endblock %}
