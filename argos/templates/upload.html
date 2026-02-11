@@ -111,17 +111,18 @@
 
 <!-- Editor Modal -->
 <div id="editor-modal" class="modal" style="display:none;">
-    <div class="modal-content" style="max-width: 1200px; width: 95%;">
-        <span class="close" onclick="closeEditor()">&times;</span>
-        <h3>✍️ 매뉴얼 에디터</h3>
-        <p class="text-muted" style="margin-bottom:1rem;">내용을 직접 수정하거나 AI의 도움을 받아 보강할 수 있습니다.</p>
+    <div class="modal-content editor-modal-content" style="max-width: 1200px; width: 95%;">
+        <div class="editor-header">
+            <span class="close" onclick="closeEditor()">&times;</span>
+            <h3>✍️ 매뉴얼 에디터</h3>
+            <p class="text-muted">내용을 직접 수정하거나 AI의 도움을 받아 보강할 수 있습니다.</p>
+        </div>
 
-        <div id="editor-container" style="display: flex; flex-direction: column; gap: 1.5rem;">
+        <div id="editor-container" class="editor-body">
             <!-- Sections will be injected here -->
         </div>
 
-        <div
-            style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 0.5rem; border-top: 1px solid #eee; padding-top: 1rem;">
+        <div class="editor-footer">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
             <button class="btn" style="background:#f59e0b;" onclick="closeEditor(); manualize(currentDocId, true)">🔄 다시
                 Manualize</button>
@@ -589,6 +590,42 @@
         width: 90%;
         max-height: 80vh;
         overflow: auto;
+    }
+
+    .editor-modal-content {
+        display: flex;
+        flex-direction: column;
+        max-height: 90vh;
+        overflow: hidden;
+        padding: 0;
+    }
+
+    .editor-header {
+        padding: 1.5rem 2rem 0.5rem;
+        border-bottom: 1px solid #e5e7eb;
+        flex-shrink: 0;
+    }
+
+    .editor-header h3 {
+        margin-top: 0;
+    }
+
+    .editor-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1.5rem 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+
+    .editor-footer {
+        padding: 1rem 2rem;
+        border-top: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        flex-shrink: 0;
     }
 
     .modal-content h3 {
