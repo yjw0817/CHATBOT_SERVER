@@ -23,7 +23,7 @@
             {% for apt in apartments %}
             <li style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #eee;">
                 <span>{{ apt.name }} ({{ apt.apt_id }})</span>
-                <button class="btn-small" style="background:#ef4444;color:white;" onclick="deleteApartment('{{ apt.apt_id }}', '{{ apt.name }}')">🗑️ 삭제</button>
+                <button class="btn-small" style="background:#f87171;color:white;" onclick="deleteApartment('{{ apt.apt_id }}', '{{ apt.name }}')">🗑️ 삭제</button>
             </li>
             {% endfor %}
         </ul>
@@ -83,7 +83,7 @@
                     <button class="btn-small btn-gate" onclick="qualityGate('{{ doc.doc_id }}')">✅ Gate</button>
                     <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}"
                         onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
-                    <button class="btn-small" style="background:#ef4444;color:white;" onclick="deleteDocument('{{ doc.doc_id }}', '{{ doc.title }}')">🗑️</button>
+                    <button class="btn-small" style="background:#f87171;color:white;" onclick="deleteDocument('{{ doc.doc_id }}', '{{ doc.title }}')">🗑️</button>
                     {% else %}
                     <span class="text-muted">Archived</span>
                     {% endif %}
