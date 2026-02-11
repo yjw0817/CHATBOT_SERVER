@@ -795,82 +795,143 @@ def update_sections(doc_id: str, req: SectionsUpdate):
     return {"success": True, "doc_id": doc_id}
 
 
-# ============ STEP 2: AI HELPER (Refine/Fill/Recommend) ============
+# ============ STEP 2: AI HELPER (Fill/Refine) ============
 
 class RefineRequest(BaseModel):
     text: str
     task: str  # "refine", "fill", "recommend"
-    context: Optional[str] = None # Section name or issue message
+    context: Optional[str] = None  # Section name or issue message
+    allow_qa: Optional[str] = None  # "true" or "false" (for fill task)
 
-REFINE_PROMPT = """당신은 RAG(Retrieval-Augmented Generation) 지식베이스 전처리 전문가입니다.
-아래 텍스트는 챗봇이 검색하여 답변에 활용할 RAG 데이터로 변환되기 전 단계입니다.
-이 텍스트를 챗봇이 정확하고 신뢰성 있게 검색·인용할 수 있도록 최적화하세요.
 
-[요청 타입]: {task}
-[대상 텍스트]: {text}
-[섹션명]: {context}
+def _to_bool_allow_qa(val) -> bool:
+    """Normalize allow_qa to bool. Accepts bool, str, int, None."""
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in ("true", "1", "yes")
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return False
 
-[원본 문서 참고 내용]:
-{raw_text}
 
-[작업별 지침]
+FILL_SECTION_TEXT_PROMPT_V3 = """당신은 RAG 청크(섹션 텍스트)를 '독립적으로 이해 가능한 매뉴얼'로 보강하는 편집자입니다.
+중요: 이 작업은 '새 정보 추가'가 아니라, 동일 문서(raw_text) 내부의 관련 내용을 모아 재구성하는 것입니다.
 
-■ "refine" (다듬기 — RAG 검색 최적화)
-목표: 챗봇이 이 텍스트를 검색했을 때 정확한 답변을 생성할 수 있도록 정리
-1. 대명사("이것", "그것", "해당")를 구체적인 명칭으로 교체하세요.
-2. 생략된 주어/목적어를 복원하여 문장이 독립적으로 이해 가능하게 만드세요.
-3. 핵심 키워드(환불, 예약, 취소, 운영시간 등)를 문장에 명시적으로 포함하세요.
-4. "~의 경우", "~에 대해" 같은 조건 표현은 구체적인 상황으로 풀어쓰세요.
-5. 한 문장에 하나의 정보만 담고, bullet point로 나열하세요.
-6. 모호한 표현("상황에 따라", "가능하면", "적당히")은 구체적 기준으로 바꾸거나 [확인 필요]를 붙이세요.
+[입력]
+allow_qa: {allow_qa}
+section_text: {section_text}
+raw_text: {raw_text}
 
-■ "fill" (보강 — RAG 청크 독립성 확보)
-목표: 이 섹션만으로 질문에 답변이 가능하도록 부족한 맥락 보강
-1. 앞뒤 섹션 없이도 이 청크만 읽고 답변할 수 있도록 필요한 배경 정보를 추가하세요.
-2. 암묵적으로 가정된 조건(예: "회원만 가능")을 명시하세요.
-3. 약어, 내부 용어를 풀어서 설명을 추가하세요. 예: "FC" → "FC(프론트 카운터)"
-4. 관련 Q&A 형태를 추가하여 검색 적중률을 높이세요. 예: "Q: 환불 기한은? A: ..."
-5. 원본 문서에 있는 내용만 활용하되, 흩어져 있는 관련 정보를 이 섹션에 모아주세요.
+[절대 규칙]
+1) 원문에 없는 정보(수치/기간/금액/정책/예외)를 절대 만들지 마세요.
+2) 근거가 없으면 내용을 채우지 말고, 해당 지점에만 "[확인 필요: 무엇을 확인?]" 라벨을 붙이세요.
+3) 암묵 조건/전제는 raw_text에 암시/표현이 있는 경우에만 명시적으로 풀어쓰세요.
+4) 약어/내부 용어는 원문에 등장한 것만 풀어 설명을 추가하세요. (원문에 없으면 금지)
+5) 개인정보(전화/이메일/계좌/상세주소/식별번호 등)는 ***로 마스킹을 유지하세요. 원문에 있어도 그대로 노출 금지.
+6) (Q&A 정책 - allow_qa에 따라 다름)
+   - allow_qa=false: Q&A를 새로 추가하지 마세요. 이미 존재하는 Q&A만 문맥을 해치지 않는 범위에서 유지/정리하세요.
+   - allow_qa=true: 원문에 답이 명확히 존재하는 경우에만 Q&A를 1~3개까지 '추가'할 수 있습니다.
+     답이 불명확하면 Q&A를 만들지 말고 "[확인 필요]"로 처리하세요.
+7) 기존 section_text의 주제/범위를 바꾸지 마세요. (다른 섹션 주제를 섞어 넣지 말 것)
 
-■ "recommend" (추천 — RAG에 적합한 표준 템플릿 제안)
-해당 섹션에 적합한 RAG 최적화된 표준 문구를 제안하세요.
+[개선 목표]
+- 앞뒤 섹션 없이도 이 section_text만 읽고 답변 가능한 수준으로,
+  원문에 흩어진 관련 규칙/조건/채널/예외를 이 섹션 안에 통합하세요.
+- 중복 bullet 제거, 표현 정돈, 항목 제목을 명확히.
+- 너무 긴 항목은 같은 주제 안에서 2개로 쪼개되 형식은 유지하세요.
 
-[필수 규칙 — 위반 시 답변 무효]
-1. 원본 문서에 없는 정보(수치, 기간, 금액 등)를 절대 만들어 넣지 마세요.
-2. 원본에서 근거를 찾을 수 없으면 반드시 "[확인 필요]" 라벨을 붙이세요.
-3. 원본 문서의 사실과 다른 내용을 생성하면 안 됩니다.
-4. 추측이나 일반 상식으로 빈칸을 채우지 마세요.
+[출력 형식(반드시 유지)]
+- 오직 개선된 section_text 전체를 plain text로만 출력하세요.
+- 섹션 시작: "## "
+- 항목 제목: "### "
+- 본문: "-" bullet
+- Q&A는 allow_qa=true 이거나 원래 존재하는 경우에만, 항목 하단에 아래 형식으로만 포함:
+  - Q: ...
+  - A: ...
 
-반환 형식: 제안하는 텍스트만 출력하세요. 다른 설명은 생략하세요."""
+[추가 가이드]
+- raw_text에서 근거가 명확한 내용만 '모아서' 넣고, 근거 없는 부분은 채우지 않습니다.
+- "[확인 필요]"는 남발하지 말고 '필수 판단에 필요한 핵심 빈칸'에만 사용하세요.
+- 설명/해설/JSON 출력 금지. 오직 최종 텍스트만 출력하세요.
+"""
+
+
+FINALIZE_SECTION_TEXT_PROMPT_V1 = """당신은 RAG 검색 적중률과 답변 일관성을 높이기 위해 section_text(plain text)를 '최종 문구'로 다듬는 편집자입니다.
+중요: 사실/정책/수치/기간/금액 등 새로운 내용을 추가하지 마세요. 오직 표현과 구조만 최적화합니다.
+
+[입력]
+section_text: {section_text}
+raw_text: {raw_text}
+
+[절대 규칙]
+1) 새 정보 추가 금지(수치/기간/금액/정책/예외/절차 창작 금지)
+2) 원문/현 section_text와 다른 사실 생성 금지
+3) 개인정보 마스킹 유지(***)
+4) 근거가 불명확한 문장 추가 금지. 불명확하면 "[확인 필요: ...]"를 유지하거나 더 명확히 작성
+
+[최적화 목표]
+- 검색 키워드에 잘 걸리도록 항목 제목(###)을 '질문형 또는 키워드형'으로 선명하게
+  예: "환불 규정" → "환불 규정/기한/위약금"
+- bullets를 짧고 병렬 구조로 정리(중복 제거)
+- 같은 의미의 표현을 통일(용어 표준화)
+- Q&A가 이미 존재하면, 질문을 더 명확히 하되 답은 그대로(내용 추가 금지)
+- 너무 긴 bullet은 2개로 분리하되 의미 유지
+
+[출력]
+- 오직 최종 section_text 전체를 plain text로만 출력하세요.
+- 형식 유지:
+  - "## " 섹션
+  - "### " 항목
+  - "-" bullet
+  - Q/A는 존재할 때만 유지
+- 설명/해설/JSON 금지
+"""
+
 
 @router.post("/doc/{doc_id}/refine-text")
 def refine_text(doc_id: str, req: RefineRequest):
-    """AI helper for specific editing tasks."""
+    """AI helper: fill (맥락 보강), refine (RAG 최적화), recommend (표준 템플릿 제안)."""
     if not is_llm_available():
         raise HTTPException(status_code=503, detail="LLM 사용 불가")
-    
+
     # Fetch original document raw_text for reference
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT raw_text FROM documents WHERE doc_id = ?", (doc_id,))
     doc = cursor.fetchone()
     conn.close()
-    
+
     raw_text = ""
     if doc and doc["raw_text"]:
-        # Limit raw_text to prevent token overflow (use first 4000 chars)
         raw_text = doc["raw_text"][:4000]
-    
+
+    raw_text_safe = raw_text or "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
+
     try:
-        suggestion = call_llm(
-            REFINE_PROMPT.format(
-                task=req.task,
-                text=req.text,
-                context=req.context or "",
-                raw_text=raw_text or "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
-            ),
-            temperature=0.3
-        )
+        if req.task == "fill":
+            allow_qa = _to_bool_allow_qa(req.allow_qa)
+            prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
+                allow_qa=str(allow_qa).lower(),
+                section_text=req.text,
+                raw_text=raw_text_safe
+            )
+        elif req.task == "refine":
+            prompt = FINALIZE_SECTION_TEXT_PROMPT_V1.format(
+                section_text=req.text,
+                raw_text=raw_text_safe
+            )
+        else:
+            # recommend: use fill prompt with allow_qa=false as fallback
+            prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
+                allow_qa="false",
+                section_text=req.text,
+                raw_text=raw_text_safe
+            )
+
+        suggestion = call_llm(prompt, temperature=0.3)
         return {"success": True, "suggestion": suggestion}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

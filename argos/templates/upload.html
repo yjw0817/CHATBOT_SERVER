@@ -349,10 +349,14 @@
         textarea.disabled = true;
         autoResize(textarea);
 
+        const body = { text: originalText, task: task, context: sectionName };
+        if (task === 'fill') {
+            body.allow_qa = 'false';  // 기본값: Q&A 신규 추가 금지 (안전)
+        }
         const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: originalText, task: task, context: sectionName })
+            body: JSON.stringify(body)
         });
         const result = await res.json();
 
