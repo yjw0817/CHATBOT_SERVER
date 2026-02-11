@@ -674,6 +674,20 @@ def gate_section(doc_id: str, section_name: str):
     return {"success": True, "section_name": section_name, **gate_result}
 
 
+@router.post("/doc/{doc_id}/section/{section_name}/gate-stale")
+def set_gate_stale(doc_id: str, section_name: str):
+    """Mark section as gate_stale (saved without gate re-check)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE manual_sections SET gate_stale = 1, updated_at = ? WHERE doc_id = ? AND section_name = ?",
+        (datetime.now().isoformat(), doc_id, section_name)
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
 # ============ STEP 2: QUALITY GATE (document-level) ============
 
 QUALITY_GATE_PROMPT = """당신은 아파트 운영 매뉴얼의 품질을 검증하는 전문가입니다.
@@ -852,7 +866,6 @@ FILL_SECTION_TEXT_PROMPT_V3 = """당신은 RAG 청크(섹션 텍스트)를 '독�
 중요: 이 작업은 '새 정보 추가'가 아니라, 동일 문서(raw_text) 내부의 관련 내용을 모아 재구성하는 것입니다.
 
 [입력]
-allow_qa: {allow_qa}
 section_text: {section_text}
 raw_text: {raw_text}
 
@@ -862,10 +875,7 @@ raw_text: {raw_text}
 3) 암묵 조건/전제는 raw_text에 암시/표현이 있는 경우에만 명시적으로 풀어쓰세요.
 4) 약어/내부 용어는 원문에 등장한 것만 풀어 설명을 추가하세요. (원문에 없으면 금지)
 5) 개인정보(전화/이메일/계좌/상세주소/식별번호 등)는 ***로 마스킹을 유지하세요. 원문에 있어도 그대로 노출 금지.
-6) (Q&A 정책 - allow_qa에 따라 다름)
-   - allow_qa=false: Q&A를 새로 추가하지 마세요. 이미 존재하는 Q&A만 문맥을 해치지 않는 범위에서 유지/정리하세요.
-   - allow_qa=true: 원문에 답이 명확히 존재하는 경우에만 Q&A를 1~3개까지 '추가'할 수 있습니다.
-     답이 불명확하면 Q&A를 만들지 말고 "[확인 필요]"로 처리하세요.
+6) [Q&A 정책] {qa_policy_text}
 7) 기존 section_text의 주제/범위를 바꾸지 마세요. (다른 섹션 주제를 섞어 넣지 말 것)
 
 [개선 목표]
@@ -944,10 +954,15 @@ def refine_text(doc_id: str, req: RefineRequest):
     try:
         if req.task == "fill":
             allow_qa = _to_bool_allow_qa(req.allow_qa)
+            qa_policy_text = (
+                "원문 근거가 명확한 경우에만 Q&A를 1~3개 추가할 수 있습니다. 답이 불명확하면 Q&A를 만들지 말고 [확인 필요]로 처리하세요."
+                if allow_qa else
+                "Q&A는 새로 추가하지 마세요. 기존 Q&A만 유지/정리하세요."
+            )
             prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
-                allow_qa=str(allow_qa).lower(),
                 section_text=req.text,
-                raw_text=raw_text_safe
+                raw_text=raw_text_safe,
+                qa_policy_text=qa_policy_text
             )
         elif req.task == "refine":
             prompt = FINALIZE_SECTION_TEXT_PROMPT_V1.format(
@@ -955,11 +970,11 @@ def refine_text(doc_id: str, req: RefineRequest):
                 raw_text=raw_text_safe
             )
         else:
-            # recommend: use fill prompt with allow_qa=false as fallback
+            # recommend: use fill prompt with Q&A disabled
             prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
-                allow_qa="false",
                 section_text=req.text,
-                raw_text=raw_text_safe
+                raw_text=raw_text_safe,
+                qa_policy_text="Q&A는 새로 추가하지 마세요. 기존 Q&A만 유지/정리하세요."
             )
 
         suggestion = call_llm(prompt, temperature=0.3)

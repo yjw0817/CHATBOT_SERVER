@@ -149,7 +149,8 @@
         </div>
         <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 0.5rem;">
             <button class="btn" style="background:#9ca3af;" onclick="closeCompare()">❌ 취소 (원래 유지)</button>
-            <button class="btn" style="background:#3b82f6;" onclick="applyCompare()">✅ 적용하기</button>
+            <button class="btn" style="background:#6b7280;" onclick="applyCompareSaveOnly()">✅ 적용(저장)</button>
+            <button class="btn" style="background:#3b82f6;" onclick="applyCompareSaveAndGate()">✅ 적용 + Gate 재검증</button>
         </div>
     </div>
 </div>
@@ -421,7 +422,7 @@
         compareTargetTask = null;
     }
 
-    async function applyCompare() {
+    async function applyCompareSaveOnly() {
         if (compareTargetIdx === null) return;
         const idx = compareTargetIdx;
         const task = compareTargetTask;
@@ -440,10 +441,67 @@
                 refineBtn.disabled = false;
                 refineBtn.style.opacity = '1';
             }
+        }
 
-            // Auto Gate re-check after fill
-            const sectionName = textarea.dataset.sectionName;
-            await runGateAndUpdateUI(idx, sectionName);
+        // Set gate_stale flag (saved without gate re-check)
+        const sectionName = textarea.dataset.sectionName;
+        await setGateStale(sectionName);
+        textarea.dataset.gateStatus = 'STALE';
+        // Show stale hint on section
+        const card = textarea.closest('.card');
+        if (card) {
+            let staleHint = card.querySelector('.gate-stale-hint');
+            if (!staleHint) {
+                staleHint = document.createElement('div');
+                staleHint.className = 'gate-stale-hint';
+                staleHint.style.cssText = 'font-size:12px;color:#d97706;margin-bottom:6px;';
+                staleHint.textContent = '⚠️ 변경됨: Gate 재검증 필요';
+                card.insertBefore(staleHint, card.querySelector('.section-row'));
+            }
+        }
+    }
+
+    async function applyCompareSaveAndGate() {
+        if (compareTargetIdx === null) return;
+        const idx = compareTargetIdx;
+        const task = compareTargetTask;
+        const textarea = document.getElementById(`editor-${idx}`);
+        textarea.value = document.getElementById('compare-after').value;
+        autoResize(textarea);
+        closeCompare();
+        await saveEditor();
+
+        // Mark step 1 done and enable step 2
+        if (task === 'fill') {
+            const doneEl = document.getElementById(`step1-done-${idx}`);
+            if (doneEl) doneEl.style.display = 'inline';
+            const refineBtn = document.getElementById(`btn-refine-${idx}`);
+            if (refineBtn) {
+                refineBtn.disabled = false;
+                refineBtn.style.opacity = '1';
+            }
+        }
+
+        // Run Gate re-check + update UI
+        const sectionName = textarea.dataset.sectionName;
+        await runGateAndUpdateUI(idx, sectionName);
+
+        // Remove stale hint if exists
+        const card = textarea.closest('.card');
+        if (card) {
+            const staleHint = card.querySelector('.gate-stale-hint');
+            if (staleHint) staleHint.remove();
+        }
+    }
+
+    // Keep old applyCompare as alias for backward compat
+    async function applyCompare() { return applyCompareSaveAndGate(); }
+
+    async function setGateStale(sectionName) {
+        try {
+            await fetch(`/api/doc/${currentDocId}/section/${encodeURIComponent(sectionName)}/gate-stale`, { method: 'POST' });
+        } catch(e) {
+            console.error('[GATE_STALE]', e);
         }
     }
 
