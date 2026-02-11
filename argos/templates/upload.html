@@ -80,7 +80,6 @@
                     <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
                         Manualize</button>
                     {% endif %}
-                    <button class="btn-small btn-gate" onclick="qualityGate('{{ doc.doc_id }}')">✅ Gate</button>
                     <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}"
                         onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
                     <button class="btn-small" style="background:#f87171;color:white;" onclick="deleteDocument('{{ doc.doc_id }}', '{{ doc.title }}')">🗑️</button>
@@ -307,6 +306,7 @@
                     <strong>${name} ${gateBadge}</strong>
                     <div style="display:flex; gap:0.25rem; align-items:center;">
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
+                        <button id="btn-gate-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="gateSectionUI(${idx})">🛡️ Gate 검증</button>
                         <button id="btn-highlight-${idx}" class="btn-small" style="background:#f59e0b;color:white;${(gate.status === 'NEED_FIX' || gate.status === 'BLOCK') ? '' : 'display:none;'}" onclick="toggleHighlight(${idx})">🔍 문제 표시</button>
                         <span id="step1-done-${idx}" style="display:none; color:#10b981; font-weight:700; font-size:13px;">✅</span>
                         <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
@@ -520,6 +520,23 @@
             await fetch(`/api/doc/${currentDocId}/section/${encodeURIComponent(sectionName)}/gate-stale`, { method: 'POST' });
         } catch(e) {
             console.error('[GATE_STALE]', e);
+        }
+    }
+
+    async function gateSectionUI(idx) {
+        const textarea = document.getElementById(`editor-${idx}`);
+        if (!textarea) return;
+        const sectionName = textarea.dataset.sectionName;
+        const btn = document.getElementById(`btn-gate-${idx}`);
+        if (btn) { btn.disabled = true; btn.textContent = '🛡️ 검증 중...'; }
+        await saveEditor();
+        await runGateAndUpdateUI(idx, sectionName);
+        if (btn) { btn.disabled = false; btn.textContent = '🛡️ Gate 검증'; }
+        // Remove stale hint if exists
+        const card = textarea.closest('.card');
+        if (card) {
+            const staleHint = card.querySelector('.gate-stale-hint');
+            if (staleHint) staleHint.remove();
         }
     }
 
