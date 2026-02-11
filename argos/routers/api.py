@@ -76,6 +76,60 @@ def list_apartments():
     return [dict(row) for row in rows]
 
 
+@router.delete("/apartments/{apt_id}")
+def delete_apartment(apt_id: str):
+    """Delete apartment and all related data (cascading)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT apt_id FROM apartments WHERE apt_id = ?", (apt_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Apartment not found")
+
+    cursor.execute("SELECT doc_id FROM documents WHERE apt_id = ?", (apt_id,))
+    doc_ids = [r["doc_id"] for r in cursor.fetchall()]
+    cursor.execute("SELECT conversation_id FROM conversations WHERE apt_id = ?", (apt_id,))
+    conv_ids = [r["conversation_id"] for r in cursor.fetchall()]
+    deleted = {}
+    if doc_ids:
+        ph = ",".join("?" * len(doc_ids))
+        for tbl in ["manual_section_revisions", "manual_sections", "qa_issues", "chunks", "api_specs"]:
+            cursor.execute(f"DELETE FROM {tbl} WHERE doc_id IN ({ph})", doc_ids)
+            deleted[tbl] = cursor.rowcount
+    if conv_ids:
+        ph2 = ",".join("?" * len(conv_ids))
+        cursor.execute(f"DELETE FROM messages WHERE conversation_id IN ({ph2})", conv_ids)
+        deleted["messages"] = cursor.rowcount
+    for tbl in ["conversations", "improve_suggestions", "branch_class_cache", "documents"]:
+        cursor.execute(f"DELETE FROM {tbl} WHERE apt_id = ?", (apt_id,))
+        deleted[tbl] = cursor.rowcount
+    cursor.execute("DELETE FROM apartments WHERE apt_id = ?", (apt_id,))
+    deleted["apartments"] = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return {"success": True, "apt_id": apt_id, "deleted": deleted}
+
+
+@router.delete("/doc/{doc_id}")
+def delete_document(doc_id: str):
+    """Delete a document and all related data."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT doc_id FROM documents WHERE doc_id = ?", (doc_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document not found")
+    deleted = {}
+    for tbl in ["manual_section_revisions", "manual_sections", "qa_issues", "chunks", "api_specs"]:
+        cursor.execute(f"DELETE FROM {tbl} WHERE doc_id = ?", (doc_id,))
+        deleted[tbl] = cursor.rowcount
+    cursor.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+    deleted["documents"] = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return {"success": True, "doc_id": doc_id, "deleted": deleted}
+
+
 # ============ UPLOAD ============
 
 @router.post("/upload")
@@ -329,26 +383,30 @@ def manualize(doc_id: str, force: bool = False):
                 "todo_questions": []
             }
 
-    # Use LLM or fallback
-    result_data = {}
-    llm_error_msg = None
-    llm_available = is_llm_available()
+    # LLM is required
+    if not is_llm_available():
+        conn.close()
+        raise HTTPException(status_code=503, detail="LLM이 활성화되지 않았습니다. .env 설정을 확인하세요.")
 
-    if llm_available:
-        try:
-            content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text[:8000]), temperature=0.3)
-            if content:
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if json_match:
-                    result_data = json.loads(json_match.group())
-            else:
-                llm_error_msg = "LLM 응답이 비어있습니다."
-        except Exception as e:
-            llm_error_msg = f"LLM 호출 실패: {str(e)}"
+    result_data = {}
+    try:
+        content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text[:8000]), temperature=0.3)
+        if content:
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                result_data = json.loads(json_match.group())
+        if not result_data.get("sections"):
+            conn.close()
+            raise HTTPException(status_code=502, detail="LLM 응답을 파싱할 수 없습니다.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=502, detail=f"LLM 호출 실패: {str(e)}")
 
     sections_list = result_data.get("sections", [])
     todo_questions = result_data.get("clarification_questions", [])
-    
+
     sections_map = {}
     all_issues = []
 
@@ -411,7 +469,7 @@ def manualize(doc_id: str, force: bool = False):
             else:
                 # V1 fallback: content is plain string
                 sections_map[name] = content_items if content_items else "정보 없음"
-                
+
                 # V1 issues at section level
                 for issue in s.get("issues", []):
                     all_issues.append({
@@ -420,23 +478,6 @@ def manualize(doc_id: str, force: bool = False):
                         "message": f"[{name}] {issue.get('message')}",
                         "suggestion": issue.get("suggestion")
                     })
-    else:
-        # Fallback: extract headings
-        lines = raw_text.split("\n")
-        current_section = "일반"
-        section_lines = {}
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("## ") or stripped.startswith("# "):
-                current_section = stripped.lstrip("#").strip()[:30]
-                if current_section not in section_lines: section_lines[current_section] = []
-            elif stripped:
-                if current_section not in section_lines: section_lines[current_section] = []
-                section_lines[current_section].append(f"- {stripped}")
-        for key, val_lines in section_lines.items():
-            sections_map[key] = "\n".join(val_lines[:20])
-        if not sections_map:
-            sections_map["전체 내용"] = raw_text[:2000]
     
     # Save sections
     cursor.execute("DELETE FROM manual_sections WHERE doc_id = ?", (doc_id,))
@@ -468,8 +509,7 @@ def manualize(doc_id: str, force: bool = False):
         "todo_questions": todo_questions,
         "change_summary": result_data.get("change_summary", ""),
         "pii_handling": result_data.get("pii_handling", {}),
-        "llm_used": bool(sections_list and llm_available and not llm_error_msg),
-        "llm_error": llm_error_msg
+        "llm_used": True
     }
 
 
@@ -798,10 +838,73 @@ def get_sections(doc_id: str):
     """Get manual sections for a document."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = ?", (doc_id,))
+    cursor.execute("SELECT section_name, section_text, gate_status, gate_reasons_json FROM manual_sections WHERE doc_id = ?", (doc_id,))
     sections = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return sections
+
+
+def _split_raw_by_headings(raw_text: str) -> list:
+    """Split raw_text into chunks by heading patterns."""
+    heading_pattern = re.compile(r'^(?:#{1,4}\s+.+|(?:\d+[\.\)]\s*).+|.+[:\uff1a]\s*)$', re.MULTILINE)
+    matches = list(heading_pattern.finditer(raw_text))
+    if not matches:
+        return []
+    chunks = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(raw_text)
+        heading = m.group().strip().lstrip("#").strip()
+        body = raw_text[start:end].strip()
+        chunks.append({"heading": heading, "body": body})
+    return chunks
+
+
+def _heading_match(section_name: str, headings: list) -> int:
+    """Match section name to heading index by word overlap. Returns -1 if no match."""
+    sec_words = set(re.findall(r'[\w가-힣]+', section_name.lower()))
+    if not sec_words:
+        return -1
+    best_idx, best_score = -1, 0
+    for i, h in enumerate(headings):
+        h_words = set(re.findall(r'[\w가-힣]+', h["heading"].lower()))
+        overlap = len(sec_words & h_words)
+        score = overlap / max(len(sec_words | h_words), 1)
+        if score > best_score and score >= 0.3:
+            best_score = score
+            best_idx = i
+    return best_idx
+
+
+@router.get("/doc/{doc_id}/source-map")
+def get_source_map(doc_id: str):
+    """Get per-section matched raw text using heading matching."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = ?", (doc_id,))
+    doc = cursor.fetchone()
+    if not doc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    cursor.execute("SELECT section_name FROM manual_sections WHERE doc_id = ?", (doc_id,))
+    sections = [row["section_name"] for row in cursor.fetchall()]
+    conn.close()
+
+    raw_text = doc["raw_text"] or ""
+    chunks = _split_raw_by_headings(raw_text)
+    source_map = {}
+    used = set()
+
+    for sec_name in sections:
+        idx = _heading_match(sec_name, chunks)
+        if idx >= 0 and idx not in used:
+            source_map[sec_name] = chunks[idx]["body"]
+            used.add(idx)
+        else:
+            source_map[sec_name] = None
+
+    return {"source_map": source_map, "raw_text": raw_text, "matched": sum(1 for v in source_map.values() if v is not None)}
 
 
 @router.get("/doc/{doc_id}/issues")

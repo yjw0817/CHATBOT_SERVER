@@ -15,6 +15,23 @@
         </form>
     </div>
 
+    <!-- Apartment List -->
+    <div class="card">
+        <h3>등록된 아파트</h3>
+        {% if apartments %}
+        <ul style="list-style:none;padding:0;margin:0;">
+            {% for apt in apartments %}
+            <li style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #eee;">
+                <span>{{ apt.name }} ({{ apt.apt_id }})</span>
+                <button class="btn-small" style="background:#ef4444;color:white;" onclick="deleteApartment('{{ apt.apt_id }}', '{{ apt.name }}')">🗑️ 삭제</button>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted">등록된 아파트가 없습니다.</p>
+        {% endif %}
+    </div>
+
     <!-- Upload Document -->
     <div class="card">
         <h3>문서 업로드</h3>
@@ -66,6 +83,7 @@
                     <button class="btn-small btn-gate" onclick="qualityGate('{{ doc.doc_id }}')">✅ Gate</button>
                     <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}"
                         onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
+                    <button class="btn-small" style="background:#ef4444;color:white;" onclick="deleteDocument('{{ doc.doc_id }}', '{{ doc.title }}')">🗑️</button>
                     {% else %}
                     <span class="text-muted">Archived</span>
                     {% endif %}
@@ -105,6 +123,7 @@
         <div
             style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 0.5rem; border-top: 1px solid #eee; padding-top: 1rem;">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
+            <button class="btn" style="background:#64748b;" onclick="toggleSourceCompare()">📄 원본 비교</button>
             <button class="btn" style="background:#f59e0b;" onclick="closeEditor(); manualize(currentDocId, true)">🔄 다시
                 Manualize</button>
             <button id="save-editor-btn" class="btn" onclick="saveEditor()">💾 저장하기</button>
@@ -190,22 +209,25 @@
         document.getElementById('result-modal').style.display = 'flex';
     }
 
+    function renderGateReasonsHTML(gateStatus, gateReasonsJson) {
+        if (!gateStatus || gateStatus === 'PASS') return '';
+        let reasons = [];
+        try { reasons = JSON.parse(gateReasonsJson || '[]'); } catch(e) {}
+        if (!reasons.length) return '';
+        const color = gateStatus === 'BLOCK' ? '#991b1b' : '#92400e';
+        const bg = gateStatus === 'BLOCK' ? '#fef2f2' : '#fffbeb';
+        const border = gateStatus === 'BLOCK' ? '#fecaca' : '#fde68a';
+        const label = gateStatus === 'BLOCK' ? '🚫 BLOCK' : '⚠️ NEED_FIX';
+        return `<div class="gate-reasons-box" style="background:${bg};color:${color};border:1px solid ${border};border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:13px;">
+            <strong>${label}</strong>
+            <ul style="margin:4px 0 0 1.2rem;padding:0;">${reasons.map(r => `<li>${r.message || r}</li>`).join('')}</ul>
+        </div>`;
+    }
+
     function openEditorWithData(docId, data) {
         currentDocId = docId;
         const container = document.getElementById('editor-container');
         container.innerHTML = '';
-
-        // Add LLM Error if any
-        if (data.llm_error) {
-            const errDiv = document.createElement('div');
-            errDiv.className = 'info';
-            errDiv.style.background = '#fef2f2';
-            errDiv.style.color = '#991b1b';
-            errDiv.style.border = '1px solid #fecaca';
-            errDiv.style.marginBottom = '1rem';
-            errDiv.innerHTML = `<strong>⚠️ LLM 사용 불가: ${data.llm_error}</strong><br><small>규칙 기반 알고비즘으로 대체되었습니다.</small>`;
-            container.appendChild(errDiv);
-        }
 
         // Add Change Summary if any
         if (data.change_summary) {
@@ -227,13 +249,24 @@
             container.appendChild(todoDiv);
         }
 
+        // Build gate info map from sections data
+        const gateInfo = {};
+        if (data.sections_gate) {
+            data.sections_gate.forEach(s => {
+                gateInfo[s.section_name] = { status: s.gate_status, reasons: s.gate_reasons_json };
+            });
+        }
+
         let sectionIndex = 0;
         Object.entries(data.section_details).forEach(([name, text]) => {
             const idx = sectionIndex++;
+            const gate = gateInfo[name] || {};
+            const gateHTML = renderGateReasonsHTML(gate.status, gate.reasons);
             const secDiv = document.createElement('div');
             secDiv.className = 'card';
             secDiv.style.margin = '0';
             secDiv.innerHTML = `
+                ${gateHTML}
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                     <strong>${name}</strong>
                     <div style="display:flex; gap:0.25rem; align-items:center;">
@@ -242,6 +275,7 @@
                         <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white; opacity:0.5;" onclick="aiRefine(${idx}, 'refine')" disabled>② RAG 최적화</button>
                     </div>
                 </div>
+                <div id="source-panel-${idx}" class="source-panel" style="display:none;"></div>
                 <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" oninput="autoResize(this)">${text}</textarea>
             `;
             container.appendChild(secDiv);
@@ -260,7 +294,7 @@
         const sections = await res.json();
         const details = {};
         sections.forEach(s => details[s.section_name] = s.section_text);
-        openEditorWithData(docId, { section_details: details, todo_questions: [] });
+        openEditorWithData(docId, { section_details: details, todo_questions: [], sections_gate: sections });
     }
 
     async function qualityGate(docId) {
@@ -470,6 +504,54 @@
         document.getElementById('result-modal').style.display = 'flex';
     }
 
+    async function deleteApartment(aptId, aptName) {
+        if (!confirm(`아파트 '${aptName}'과 관련된 모든 문서, RAG 데이터, 대화가 삭제됩니다. 계속하시겠습니까?`)) return;
+        const res = await fetch(`/api/apartments/${aptId}`, { method: 'DELETE' });
+        if (res.ok) { alert('삭제되었습니다.'); location.reload(); }
+        else { const d = await res.json(); alert('삭제 실패: ' + (d.detail || '오류')); }
+    }
+
+    async function deleteDocument(docId, title) {
+        if (!confirm(`문서 '${title}'과 관련된 모든 섹션, RAG 데이터가 삭제됩니다. 계속하시겠습니까?`)) return;
+        const res = await fetch(`/api/doc/${docId}`, { method: 'DELETE' });
+        if (res.ok) { alert('삭제되었습니다.'); location.reload(); }
+        else { const d = await res.json(); alert('삭제 실패: ' + (d.detail || '오류')); }
+    }
+
+    let sourceCompareVisible = false;
+    async function toggleSourceCompare() {
+        sourceCompareVisible = !sourceCompareVisible;
+        const panels = document.querySelectorAll('.source-panel');
+        if (!sourceCompareVisible) {
+            panels.forEach(p => p.style.display = 'none');
+            return;
+        }
+        // Fetch source map
+        const res = await fetch(`/api/doc/${currentDocId}/source-map`);
+        if (!res.ok) { alert('원본 텍스트를 불러올 수 없습니다.'); sourceCompareVisible = false; return; }
+        const data = await res.json();
+        const container = document.getElementById('editor-container');
+        const textareas = container.querySelectorAll('.editor-textarea');
+        textareas.forEach((ta, idx) => {
+            const name = ta.dataset.sectionName;
+            const panel = document.getElementById(`source-panel-${idx}`);
+            if (!panel) return;
+            const matched = data.source_map[name];
+            if (matched) {
+                panel.innerHTML = `<div class="source-label">📄 원본 텍스트</div><div class="source-text">${escapeHtml(matched)}</div>`;
+            } else {
+                panel.innerHTML = `<div class="source-label">📄 원본 텍스트 <span style="color:#dc2626;font-size:12px;">(헤딩 매칭 실패 — 다시 Manualize 해주세요)</span></div><div class="source-text">${escapeHtml(data.raw_text)}</div>`;
+            }
+            panel.style.display = 'block';
+        });
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     // Close modal on outside click
     document.getElementById('result-modal').addEventListener('click', function (e) {
         if (e.target === this) closeModal();
@@ -630,6 +712,31 @@
         outline: none;
         border-color: #22c55e;
         box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+    }
+
+    .source-panel {
+        margin-bottom: 8px;
+    }
+
+    .source-label {
+        font-weight: 600;
+        font-size: 13px;
+        color: #4b5563;
+        margin-bottom: 4px;
+    }
+
+    .source-text {
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 300px;
+        overflow-y: auto;
+        color: #374151;
     }
 
     @media (max-width: 768px) {
