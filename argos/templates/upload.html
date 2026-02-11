@@ -209,6 +209,26 @@
         document.getElementById('result-modal').style.display = 'flex';
     }
 
+    function _gateBadgeHTML(status) {
+        if (!status) return '';
+        const badges = {
+            'PASS': '<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">✅ PASS</span>',
+            'NEED_FIX': '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">🔧 NEED_FIX</span>',
+            'BLOCK': '<span style="background:#fef2f2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">⛔ BLOCK</span>'
+        };
+        return badges[status] || '';
+    }
+
+    function _gateHintHTML(status) {
+        if (!status) return '';
+        const hints = {
+            'PASS': '<div style="font-size:12px;color:#166534;margin-bottom:6px;">✅ RAG 반영 가능 (PASS)</div>',
+            'NEED_FIX': '<div style="font-size:12px;color:#92400e;margin-bottom:6px;">🔧 Fill 보강 → Gate 재검증 필요</div>',
+            'BLOCK': '<div style="font-size:12px;color:#991b1b;margin-bottom:6px;">⛔ 수동 수정 필요 (BLOCK)</div>'
+        };
+        return hints[status] || '';
+    }
+
     function renderGateReasonsHTML(gateStatus, gateReasonsJson) {
         if (!gateStatus || gateStatus === 'PASS') return '';
         let reasons = [];
@@ -250,11 +270,16 @@
             container.appendChild(todoDiv);
         }
 
-        // Build gate info map from sections data
+        // Build gate info map from sections data OR gate_results (from manualize)
         const gateInfo = {};
         if (data.sections_gate) {
             data.sections_gate.forEach(s => {
                 gateInfo[s.section_name] = { status: s.gate_status, reasons: s.gate_reasons_json };
+            });
+        }
+        if (data.gate_results) {
+            Object.entries(data.gate_results).forEach(([name, g]) => {
+                gateInfo[name] = { status: g.status, reasons: JSON.stringify(g.reasons || []) };
             });
         }
 
@@ -263,24 +288,28 @@
             const idx = sectionIndex++;
             const gate = gateInfo[name] || {};
             const gateHTML = renderGateReasonsHTML(gate.status, gate.reasons);
+            const gateBadge = _gateBadgeHTML(gate.status);
+            const gateHint = _gateHintHTML(gate.status);
+            const fillDisabled = (gate.status === 'PASS' || gate.status === 'BLOCK') ? 'disabled style="background:#10b981;color:white;opacity:0.4;cursor:not-allowed;"' : 'style="background:#10b981;color:white;"';
             const secDiv = document.createElement('div');
             secDiv.className = 'card';
             secDiv.style.margin = '0';
             secDiv.innerHTML = `
                 ${gateHTML}
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                    <strong>${name}</strong>
+                    <strong>${name} ${gateBadge}</strong>
                     <div style="display:flex; gap:0.25rem; align-items:center;">
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
                         <span id="step1-done-${idx}" style="display:none; color:#10b981; font-weight:700; font-size:13px;">✅</span>
-                        <button id="btn-fill-${idx}" class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
+                        <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                         <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white; opacity:0.5;" onclick="aiRefine(${idx}, 'refine')" disabled>② RAG 최적화</button>
                     </div>
                 </div>
+                ${gateHint}
                 <div id="section-row-${idx}" class="section-row">
                     <div id="source-panel-${idx}" class="source-panel" style="display:none;"></div>
                     <div class="editor-panel">
-                        <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" oninput="autoResize(this)">${text}</textarea>
+                        <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" data-gate-status="${gate.status || ''}" oninput="autoResize(this)">${text}</textarea>
                     </div>
                 </div>
             `;
@@ -410,6 +439,41 @@
             if (refineBtn) {
                 refineBtn.disabled = false;
                 refineBtn.style.opacity = '1';
+            }
+
+            // Auto Gate re-check after fill
+            const sectionName = textarea.dataset.sectionName;
+            await runGateAndUpdateUI(idx, sectionName);
+        }
+    }
+
+    async function runGateAndUpdateUI(idx, sectionName) {
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/section/${encodeURIComponent(sectionName)}/gate`, { method: 'POST' });
+            if (!res.ok) return;
+            const gate = await res.json();
+            updateSectionGateUI(idx, gate.status);
+        } catch(e) {
+            console.error('[GATE_RECHECK]', e);
+        }
+    }
+
+    function updateSectionGateUI(idx, status) {
+        // Update badge
+        const textarea = document.getElementById(`editor-${idx}`);
+        if (textarea) textarea.dataset.gateStatus = status || '';
+
+        // Update fill button state
+        const fillBtn = document.getElementById(`btn-fill-${idx}`);
+        if (fillBtn) {
+            if (status === 'PASS' || status === 'BLOCK') {
+                fillBtn.disabled = true;
+                fillBtn.style.opacity = '0.4';
+                fillBtn.style.cursor = 'not-allowed';
+            } else {
+                fillBtn.disabled = false;
+                fillBtn.style.opacity = '1';
+                fillBtn.style.cursor = 'pointer';
             }
         }
     }

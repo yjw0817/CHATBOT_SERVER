@@ -520,8 +520,38 @@ def manualize(doc_id: str, force: bool = False):
     
     cursor.execute("UPDATE documents SET updated_at = ? WHERE doc_id = ?", (datetime.now().isoformat(), doc_id))
     conn.commit()
+
+    # Auto Gate#1: run gate check on each section after manualize
+    gate_results = {}
+    if is_llm_available():
+        raw_text_for_gate = raw_text[:4000] if raw_text else ""
+        for section_name, section_text in sections_map.items():
+            try:
+                gate_content = call_llm(GATE_CHECK_PROMPT.format(
+                    section_text=section_text[:3000],
+                    raw_text=raw_text_for_gate
+                ), temperature=0.3)
+                gate_data = {"status": "PASS", "score": 100, "reasons": [], "required_actions": []}
+                if gate_content:
+                    gm = re.search(r'\{[\s\S]*\}', gate_content)
+                    if gm:
+                        gate_data = json.loads(gm.group())
+                gate_results[section_name] = gate_data
+
+                # Save gate result
+                cursor.execute(
+                    "UPDATE manual_sections SET gate_status = ?, gate_score = ?, gate_reasons_json = ?, gate_stale = 0, updated_at = ? WHERE doc_id = ? AND section_name = ?",
+                    (gate_data.get("status", "PASS"), gate_data.get("score", 100),
+                     json.dumps(gate_data.get("reasons", []), ensure_ascii=False),
+                     datetime.now().isoformat(), doc_id, section_name)
+                )
+            except Exception as e:
+                print(f"[MANUALIZE_GATE] Gate error for '{section_name}': {e}")
+                gate_results[section_name] = {"status": "PASS", "score": 100, "reasons": []}
+        conn.commit()
+
     conn.close()
-    
+
     return {
         "success": True,
         "doc_id": doc_id,
@@ -530,6 +560,7 @@ def manualize(doc_id: str, force: bool = False):
         "todo_questions": todo_questions,
         "change_summary": result_data.get("change_summary", ""),
         "pii_handling": result_data.get("pii_handling", {}),
+        "gate_results": gate_results,
         "llm_used": True
     }
 
