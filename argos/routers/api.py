@@ -1075,7 +1075,7 @@ def get_sections(doc_id: str):
     """Get manual sections for a document."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT section_name, section_text, gate_status, gate_reasons_json FROM manual_sections WHERE doc_id = ?", (doc_id,))
+    cursor.execute("SELECT section_name, section_text, gate_status, gate_reasons_json, gate_stale FROM manual_sections WHERE doc_id = ?", (doc_id,))
     sections = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return sections

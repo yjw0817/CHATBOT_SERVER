@@ -276,12 +276,12 @@
         const gateInfo = {};
         if (data.sections_gate) {
             data.sections_gate.forEach(s => {
-                gateInfo[s.section_name] = { status: s.gate_status, reasons: s.gate_reasons_json };
+                gateInfo[s.section_name] = { status: s.gate_status, reasons: s.gate_reasons_json, stale: s.gate_stale };
             });
         }
         if (data.gate_results) {
             Object.entries(data.gate_results).forEach(([name, g]) => {
-                gateInfo[name] = { status: g.status, reasons: JSON.stringify(g.reasons || []) };
+                gateInfo[name] = { status: g.status, reasons: JSON.stringify(g.reasons || []), stale: 0 };
             });
         }
 
@@ -289,10 +289,15 @@
         Object.entries(data.section_details).forEach(([name, text]) => {
             const idx = sectionIndex++;
             const gate = gateInfo[name] || {};
+            const isStale = gate.stale === 1 || gate.stale === true;
             const gateHTML = renderGateReasonsHTML(gate.status, gate.reasons);
-            const gateBadge = _gateBadgeHTML(gate.status);
-            const gateHint = _gateHintHTML(gate.status);
-            const fillDisabled = (gate.status === 'PASS' || gate.status === 'BLOCK') ? 'disabled style="background:#10b981;color:white;opacity:0.4;cursor:not-allowed;"' : 'style="background:#10b981;color:white;"';
+            const gateBadge = isStale
+                ? '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">⚠️ 미검증</span>'
+                : _gateBadgeHTML(gate.status);
+            const gateHint = isStale
+                ? '<div style="font-size:12px;color:#d97706;margin-bottom:6px;">⚠️ 변경됨: Gate 재검증 필요</div>'
+                : _gateHintHTML(gate.status);
+            const fillDisabled = (!isStale && (gate.status === 'PASS' || gate.status === 'BLOCK')) ? 'disabled style="background:#10b981;color:white;opacity:0.4;cursor:not-allowed;"' : 'style="background:#10b981;color:white;"';
             const secDiv = document.createElement('div');
             secDiv.className = 'card';
             secDiv.style.margin = '0';
