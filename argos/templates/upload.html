@@ -126,6 +126,7 @@
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
             <button class="btn" style="background:#f59e0b;" onclick="closeEditor(); manualize(currentDocId, true)">🔄 다시
                 Manualize</button>
+            <button id="btn-bulk-fill" class="btn" style="background:#d97706;" onclick="bulkFillNeedFix()">🔧 NEED_FIX 일괄 보강</button>
             <button id="save-editor-btn" class="btn" onclick="saveEditor()">💾 저장하기</button>
         </div>
     </div>
@@ -420,6 +421,16 @@
         document.getElementById('compare-modal').style.display = 'none';
         compareTargetIdx = null;
         compareTargetTask = null;
+        // Restore default buttons (in case bulk mode changed them)
+        const modal = document.getElementById('compare-modal');
+        const footer = modal.querySelector('div[style*="justify-content: flex-end"]');
+        if (footer) {
+            footer.innerHTML = `
+                <button class="btn" style="background:#9ca3af;" onclick="closeCompare()">❌ 취소 (원래 유지)</button>
+                <button class="btn" style="background:#6b7280;" onclick="applyCompareSaveOnly()">✅ 적용(저장)</button>
+                <button class="btn" style="background:#3b82f6;" onclick="applyCompareSaveAndGate()">✅ 적용 + Gate 재검증</button>
+            `;
+        }
     }
 
     async function applyCompareSaveOnly() {
@@ -534,6 +545,95 @@
                 fillBtn.style.cursor = 'pointer';
             }
         }
+    }
+
+    async function bulkFillNeedFix() {
+        const container = document.getElementById('editor-container');
+        const textareas = container.querySelectorAll('textarea.editor-textarea');
+        const targets = [];
+        textareas.forEach((ta, idx) => {
+            if (ta.dataset.gateStatus === 'NEED_FIX') {
+                targets.push({ idx, name: ta.dataset.sectionName, ta });
+            }
+        });
+
+        if (!targets.length) {
+            alert('NEED_FIX 섹션이 없습니다.');
+            return;
+        }
+
+        const bulkBtn = document.getElementById('btn-bulk-fill');
+        if (bulkBtn) { bulkBtn.disabled = true; bulkBtn.textContent = '🔧 일괄 보강 중...'; }
+
+        for (const t of targets) {
+            // Re-check status (may have changed)
+            if (t.ta.dataset.gateStatus !== 'NEED_FIX') continue;
+
+            // 1) Call Fill API
+            const body = { text: t.ta.value, task: 'fill', context: t.name, allow_qa: 'false' };
+            try {
+                const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) continue;
+                const result = await res.json();
+
+                // 2) Open compare modal and wait for user decision
+                const decision = await openBulkCompare(t.idx, t.name, t.ta.value, result.suggestion);
+
+                if (decision === 'skip') continue;
+
+                // 3) Apply + save
+                t.ta.value = document.getElementById('compare-after').value;
+                autoResize(t.ta);
+                closeCompare();
+                await saveEditor();
+
+                // 4) Gate re-check
+                await runGateAndUpdateUI(t.idx, t.name);
+
+                // 5) Mark step done
+                const doneEl = document.getElementById(`step1-done-${t.idx}`);
+                if (doneEl) doneEl.style.display = 'inline';
+                const refineBtn = document.getElementById(`btn-refine-${t.idx}`);
+                if (refineBtn) { refineBtn.disabled = false; refineBtn.style.opacity = '1'; }
+
+            } catch(e) {
+                console.error(`[BULK_FILL] Error for ${t.name}:`, e);
+            }
+        }
+
+        if (bulkBtn) { bulkBtn.disabled = false; bulkBtn.textContent = '🔧 NEED_FIX 일괄 보강'; }
+    }
+
+    function openBulkCompare(idx, sectionName, before, after) {
+        return new Promise((resolve) => {
+            compareTargetIdx = idx;
+            compareTargetTask = 'fill';
+            document.getElementById('compare-title').textContent = `🔧 일괄 보강 — ${sectionName}`;
+            document.getElementById('compare-before').textContent = before;
+            const afterTA = document.getElementById('compare-after');
+            afterTA.value = after;
+            document.getElementById('compare-modal').style.display = 'flex';
+            requestAnimationFrame(() => {
+                afterTA.style.height = 'auto';
+                afterTA.style.height = afterTA.scrollHeight + 'px';
+            });
+
+            // Override buttons for bulk mode
+            window._bulkResolve = resolve;
+            const modal = document.getElementById('compare-modal');
+            // Find buttons in footer
+            const footer = modal.querySelector('div[style*="justify-content: flex-end"]');
+            if (footer) {
+                footer.innerHTML = `
+                    <button class="btn" style="background:#9ca3af;" onclick="window._bulkResolve('skip'); closeCompare();">⏭️ 건너뛰기</button>
+                    <button class="btn" style="background:#3b82f6;" onclick="window._bulkResolve('apply');">✅ 적용 + Gate 재검증</button>
+                `;
+            }
+        });
     }
 
     async function saveEditor() {
