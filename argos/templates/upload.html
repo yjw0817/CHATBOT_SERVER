@@ -307,6 +307,7 @@
                     <strong>${name} ${gateBadge}</strong>
                     <div style="display:flex; gap:0.25rem; align-items:center;">
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
+                        <button id="btn-highlight-${idx}" class="btn-small" style="background:#f59e0b;color:white;${(gate.status === 'NEED_FIX' || gate.status === 'BLOCK') ? '' : 'display:none;'}" onclick="toggleHighlight(${idx})">🔍 문제 표시</button>
                         <span id="step1-done-${idx}" style="display:none; color:#10b981; font-weight:700; font-size:13px;">✅</span>
                         <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                         <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white; opacity:0.5;" onclick="aiRefine(${idx}, 'refine')" disabled>② RAG 최적화</button>
@@ -316,7 +317,8 @@
                 <div id="section-row-${idx}" class="section-row">
                     <div id="source-panel-${idx}" class="source-panel" style="display:none;"></div>
                     <div class="editor-panel">
-                        <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" data-gate-status="${gate.status || ''}" oninput="autoResize(this)">${text}</textarea>
+                        <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" data-gate-status="${gate.status || ''}" data-gate-reasons='${(gate.reasons || "[]").replace(/'/g, "&#39;")}' oninput="autoResize(this)">${text}</textarea>
+                        <div id="highlight-${idx}" class="highlight-preview" style="display:none;"></div>
                     </div>
                 </div>
             `;
@@ -527,6 +529,11 @@
             if (!res.ok) return;
             const gate = await res.json();
             updateSectionGateUI(idx, gate.status);
+            // Store reasons for highlight
+            const textarea = document.getElementById(`editor-${idx}`);
+            if (textarea && gate.reasons) {
+                textarea.dataset.gateReasons = JSON.stringify(gate.reasons);
+            }
         } catch(e) {
             console.error('[GATE_RECHECK]', e);
         }
@@ -550,6 +557,93 @@
                 fillBtn.style.cursor = 'pointer';
             }
         }
+
+        // Show/hide highlight button
+        const hlBtn = document.getElementById(`btn-highlight-${idx}`);
+        if (hlBtn) {
+            hlBtn.style.display = (status === 'NEED_FIX' || status === 'BLOCK') ? '' : 'none';
+        }
+
+        // Close highlight preview if status changed to PASS
+        if (status === 'PASS') {
+            const hlDiv = document.getElementById(`highlight-${idx}`);
+            if (hlDiv) hlDiv.style.display = 'none';
+            if (textarea) textarea.style.display = '';
+        }
+    }
+
+    function toggleHighlight(idx) {
+        const textarea = document.getElementById(`editor-${idx}`);
+        const hlDiv = document.getElementById(`highlight-${idx}`);
+        if (!textarea || !hlDiv) return;
+
+        if (hlDiv.style.display === 'none') {
+            // Show highlighted view
+            let reasons = [];
+            try { reasons = JSON.parse(textarea.dataset.gateReasons || '[]'); } catch(e) {}
+            hlDiv.innerHTML = renderHighlightedText(textarea.value, reasons, textarea.dataset.gateStatus);
+            hlDiv.style.display = 'block';
+            textarea.style.display = 'none';
+        } else {
+            // Back to edit mode
+            hlDiv.style.display = 'none';
+            textarea.style.display = '';
+        }
+    }
+
+    function renderHighlightedText(text, reasons, gateStatus) {
+        if (!reasons || !reasons.length) {
+            return `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">${_escHtml(text)}</pre>`;
+        }
+
+        // Collect location_hints with their severity
+        const hints = [];
+        for (const r of reasons) {
+            if (r.location_hint && r.location_hint.trim()) {
+                hints.push({
+                    hint: r.location_hint.trim(),
+                    severity: r.severity || 'MEDIUM',
+                    type: r.type || '',
+                    message: r.message || '',
+                    suggestion: r.fix_suggestion || ''
+                });
+            }
+        }
+
+        let html = _escHtml(text);
+
+        // Highlight each location_hint in the text
+        for (const h of hints) {
+            const escaped = _escHtml(h.hint);
+            // Try exact match first, then case-insensitive partial
+            const idx = html.indexOf(escaped);
+            if (idx >= 0) {
+                const color = h.severity === 'HIGH' ? '#fecaca' : '#fef08a';
+                const borderColor = h.severity === 'HIGH' ? '#f87171' : '#facc15';
+                const tooltip = `[${h.type}] ${h.message}${h.suggestion ? ' → ' + h.suggestion : ''}`;
+                html = html.substring(0, idx)
+                    + `<mark style="background:${color};border-bottom:2px solid ${borderColor};padding:1px 2px;border-radius:2px;cursor:help;" title="${_escAttr(tooltip)}">`
+                    + html.substring(idx, idx + escaped.length)
+                    + '</mark>'
+                    + html.substring(idx + escaped.length);
+            }
+        }
+
+        // Add legend
+        const legend = `<div style="font-size:11px;color:#6b7280;margin-bottom:8px;display:flex;gap:12px;">
+            <span><mark style="background:#fef08a;padding:1px 4px;border-radius:2px;">노랑</mark> NEED_FIX (LOW/MEDIUM)</span>
+            <span><mark style="background:#fecaca;padding:1px 4px;border-radius:2px;">빨강</mark> BLOCK (HIGH)</span>
+            <span style="color:#9ca3af;">마우스 올리면 상세 내용 표시</span>
+        </div>`;
+
+        return legend + `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;line-height:1.8;">${html}</pre>`;
+    }
+
+    function _escHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function _escAttr(s) {
+        return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
     async function bulkFillNeedFix() {
@@ -923,6 +1017,18 @@
         overflow: hidden;
         line-height: 1.6;
         box-sizing: border-box;
+    }
+    .highlight-preview {
+        width: 100%;
+        min-height: 80px;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #f59e0b;
+        background: #fffbeb;
+        font-size: 14px;
+        line-height: 1.6;
+        box-sizing: border-box;
+        overflow-y: auto;
     }
 
     /* Comparison modal styles */
