@@ -534,7 +534,116 @@ def manualize(doc_id: str, force: bool = False):
     }
 
 
-# ============ STEP 2: QUALITY GATE ============
+# ============ STEP 2: SECTION GATE (per-section AI check) ============
+
+GATE_CHECK_PROMPT = """당신은 RAG 반영 전, 매뉴얼 섹션 텍스트(section_text)의 품질/리스크를 판정하는 QA 게이트입니다.
+중요: 내용을 새로 작성하거나 고치지 말고, 오직 '검증 결과'만 출력하세요.
+
+[입력]
+section_text: {section_text}
+raw_text: {raw_text}
+
+[판정 상태]
+- PASS: 바로 RAG 반영 가능
+- NEED_FIX: 사람이 수정/보강 후 반영 권장
+- BLOCK: RAG 반영 금지(보안/심각 충돌/형식 붕괴)
+
+[검증 항목]
+1) PII_RISK (BLOCK 우선)
+- 전화번호/이메일/계좌/상세주소/식별번호가 마스킹 없이 노출되면 BLOCK
+- 마스킹 규칙 예: 010-****-1234, ab***@domain.com, 상세주소 ***, 계좌번호 ****
+
+2) CONFLICT (BLOCK 또는 NEED_FIX)
+- 같은 문서/섹션 내 상충 규칙(환불 가능 vs 불가 등) 징후
+- 서로 다른 조건이 충돌하는데 우선순위/예외가 명시되지 않음
+
+3) MISSING/AMBIGUOUS (NEED_FIX)
+- 필수값(기한/금액/담당/채널/조건) 누락
+- 모호 표현(적당히/가능하면/상황에 따라/신속히 등) 과다
+
+4) HALLUCINATION_RISK (NEED_FIX 또는 BLOCK)
+- raw_text에 근거가 보이지 않는 구체 수치/기간/금액/정책이 섞여 들어간 흔적
+- 특히 "반드시", "무조건", "항상"처럼 단정적 표현이 근거 없이 추가된 경우
+
+5) FORMAT (NEED_FIX)
+- "## 섹션" / "### 항목" / "-" bullet 형식 붕괴
+- 섹션명/항목명이 의미 없이 비어 있거나 반복됨
+
+[출력 형식]
+- 아래 RFC8259 유효 JSON만 반환하세요. (코드블록/설명 금지)
+- score는 0~100 정수
+
+{{
+  "status": "PASS|NEED_FIX|BLOCK",
+  "score": 0,
+  "reasons": [
+    {{
+      "type": "PII_RISK|CONFLICT|MISSING|AMBIGUOUS|HALLUCINATION_RISK|FORMAT",
+      "severity": "LOW|MEDIUM|HIGH",
+      "message": "무엇이 문제인지",
+      "location_hint": "가능하면 섹션/항목 제목 또는 문제 라인 일부",
+      "fix_suggestion": "어떻게 고치면 되는지(짧게)"
+    }}
+  ],
+  "required_actions": [
+    "사용자가 해야 할 조치 1",
+    "조치 2"
+  ]
+}}
+
+[판정 가이드]
+- BLOCK: (1) PII 미마스킹 노출, (2) 심각한 충돌, (3) 근거 없는 수치/금액/기한 다수, (4) 형식 붕괴 심각
+- NEED_FIX: 모호/누락이 핵심 답변에 영향을 주는 수준, 또는 [확인 필요]가 과도하거나 핵심값이 비어 있음
+- PASS: 위 문제 없음 또는 경미(LOW)이며 답변 품질에 영향 적음
+"""
+
+
+@router.post("/doc/{doc_id}/section/{section_name}/gate")
+def gate_section(doc_id: str, section_name: str):
+    """Run AI gate check on a single section."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT section_id, section_text FROM manual_sections WHERE doc_id = ? AND section_name = ?",
+                   (doc_id, section_name))
+    sec = cursor.fetchone()
+    if not sec:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = ?", (doc_id,))
+    doc = cursor.fetchone()
+    raw_text = (doc["raw_text"] or "")[:4000] if doc else ""
+
+    gate_result = {"status": "PASS", "score": 100, "reasons": [], "required_actions": []}
+
+    if is_llm_available():
+        try:
+            content = call_llm(GATE_CHECK_PROMPT.format(
+                section_text=sec["section_text"][:3000],
+                raw_text=raw_text
+            ), temperature=0.3)
+            if content:
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    gate_result = json.loads(json_match.group())
+        except Exception as e:
+            print(f"[GATE_SECTION] LLM error: {e}")
+
+    # Save gate result to manual_sections
+    cursor.execute(
+        "UPDATE manual_sections SET gate_status = ?, gate_score = ?, gate_reasons_json = ?, gate_stale = 0, updated_at = ? WHERE section_id = ?",
+        (gate_result.get("status", "PASS"), gate_result.get("score", 100),
+         json.dumps(gate_result.get("reasons", []), ensure_ascii=False),
+         datetime.now().isoformat(), sec["section_id"])
+    )
+    conn.commit()
+    conn.close()
+
+    return {"success": True, "section_name": section_name, **gate_result}
+
+
+# ============ STEP 2: QUALITY GATE (document-level) ============
 
 QUALITY_GATE_PROMPT = """당신은 아파트 운영 매뉴얼의 품질을 검증하는 전문가입니다.
 
