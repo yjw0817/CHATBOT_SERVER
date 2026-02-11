@@ -306,11 +306,11 @@
                     <strong>${name} ${gateBadge}</strong>
                     <div style="display:flex; gap:0.25rem; align-items:center;">
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
-                        <button id="btn-gate-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="gateSectionUI(${idx})">🛡️ Gate 검증</button>
                         <button id="btn-highlight-${idx}" class="btn-small" style="background:#f59e0b;color:white;${(gate.status === 'NEED_FIX' || gate.status === 'BLOCK') ? '' : 'display:none;'}" onclick="toggleHighlight(${idx})">🔍 문제 표시</button>
                         <span id="step1-done-${idx}" style="display:none; color:#10b981; font-weight:700; font-size:13px;">✅</span>
                         <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                         <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white; opacity:0.5;" onclick="aiRefine(${idx}, 'refine')" disabled>② RAG 최적화</button>
+                        <button id="btn-gate-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
                     </div>
                 </div>
                 ${gateHint}
