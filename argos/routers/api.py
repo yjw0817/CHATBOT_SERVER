@@ -439,7 +439,16 @@ def manualize(doc_id: str, force: bool = False):
         if content:
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
-                result_data = json.loads(json_match.group())
+                raw_json = json_match.group()
+                # Fix common LLM JSON errors
+                raw_json = re.sub(r',\s*([}\]])', r'\1', raw_json)  # trailing comma
+                raw_json = raw_json.replace('\n', ' ').replace('\r', '')  # newlines in strings
+                raw_json = re.sub(r'[\x00-\x1f]', ' ', raw_json)  # control chars
+                try:
+                    result_data = json.loads(raw_json)
+                except json.JSONDecodeError:
+                    # 2nd attempt: try fixing unescaped quotes in string values
+                    result_data = json.loads(raw_json.replace("'", '"'))
         if not result_data.get("sections"):
             conn.close()
             raise HTTPException(status_code=502, detail="LLM 응답을 파싱할 수 없습니다.")
