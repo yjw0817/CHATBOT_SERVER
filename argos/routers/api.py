@@ -893,16 +893,34 @@ def get_source_map(doc_id: str):
 
     raw_text = doc["raw_text"] or ""
     chunks = _split_raw_by_headings(raw_text)
-    source_map = {}
-    used = set()
+    if not chunks:
+        source_map = {name: None for name in sections}
+        return {"source_map": source_map, "raw_text": raw_text, "matched": 0}
 
+    # 1) Find matched heading index for each section (in order)
+    match_indices = []
     for sec_name in sections:
         idx = _heading_match(sec_name, chunks)
-        if idx >= 0 and idx not in used:
-            source_map[sec_name] = chunks[idx]["body"]
-            used.add(idx)
-        else:
+        match_indices.append(idx)
+
+    # 2) For each section, extract raw_text from matched heading to next matched heading
+    source_map = {}
+    for i, sec_name in enumerate(sections):
+        idx = match_indices[i]
+        if idx < 0:
             source_map[sec_name] = None
+            continue
+        # Find the next section's matched heading index that comes after this one
+        next_chunk_idx = len(chunks)
+        for j in range(i + 1, len(sections)):
+            if match_indices[j] > idx:
+                next_chunk_idx = match_indices[j]
+                break
+        # Collect raw_text from matched heading to next boundary
+        start_pos = chunks[idx]["body"]  # not useful, use raw positions
+        # Rebuild from chunk bodies between idx and next_chunk_idx
+        parts = [chunks[k]["body"] for k in range(idx, min(next_chunk_idx, len(chunks)))]
+        source_map[sec_name] = "\n\n".join(parts)
 
     return {"source_map": source_map, "raw_text": raw_text, "matched": sum(1 for v in source_map.values() if v is not None)}
 
