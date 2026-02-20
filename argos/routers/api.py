@@ -557,13 +557,15 @@ def manualize(doc_id: str, force: bool = False):
     raw_text_chars = len(raw_text)
     mode = get_llm_mode()
     window_count = 1
-    if raw_text_chars > MANUALIZE_HARD_LIMIT:
+    if mode == "remote":
+        window_count = len(_split_by_headings(raw_text))
+    elif raw_text_chars > MANUALIZE_HARD_LIMIT:
         window_count = max(1, -(-((raw_text_chars - MANUALIZE_WINDOW_OVERLAP)) // (MANUALIZE_WINDOW_SIZE - MANUALIZE_WINDOW_OVERLAP)))
 
     try:
         if mode == "remote":
             # Remote: 항상 섹션 분할 → 순차 처리 (내용 보존)
-            print(f"[MANUALIZE] Remote sequential: {raw_text_chars} chars for {doc_id}")
+            print(f"[MANUALIZE] Remote sequential: {raw_text_chars} chars, {window_count} sections for {doc_id}")
             sections_map = _manualize_with_window(raw_text, doc_id)
         elif raw_text_chars > MANUALIZE_HARD_LIMIT:
             # Local + 대형 문서: 윈도우 병렬 처리
