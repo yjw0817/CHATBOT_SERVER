@@ -325,6 +325,9 @@ MANUALIZE_HARD_LIMIT = 30000  # chars — force window split above this (128K ct
 MANUALIZE_WINDOW_SIZE = 25000  # chars per window (~37K tokens, 128K ctx의 ~75%)
 MANUALIZE_WINDOW_OVERLAP = 300
 
+# Manualize progress tracker (in-memory, per doc_id)
+_manualize_progress = {}  # {doc_id: {"done": 3, "total": 15}}
+
 
 @router.get("/doc/{doc_id}/char-count")
 def get_char_count(doc_id: str):
@@ -346,6 +349,12 @@ def get_char_count(doc_id: str):
         windows = _group_sections_into_windows(_split_by_headings(raw_text), MANUALIZE_WINDOW_SIZE)
         window_count = len(windows)
     return {"chars": chars, "window_count": window_count, "hard_limit": MANUALIZE_HARD_LIMIT, "mode": mode}
+
+
+@router.get("/doc/{doc_id}/manualize-progress")
+def get_manualize_progress(doc_id: str):
+    """Poll manualize progress. Returns {done, total}."""
+    return _manualize_progress.get(doc_id, {"done": 0, "total": 0})
 
 
 # ============ STEP 2: MANUALIZE ============
@@ -730,33 +739,44 @@ def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
 
     if mode == "remote":
         # Remote: 섹션별 순차 처리 (작은 입력 → 내용 보존 우수)
-        print(f"[MANUALIZE] Remote sequential: {len(sections)} sections for {doc_id}")
+        total = len(sections)
+        print(f"[MANUALIZE] Remote sequential: {total} sections for {doc_id}")
+        _manualize_progress[doc_id] = {"done": 0, "total": total}
         all_sections = {}
         for i, (_pos, section_text) in enumerate(sections):
             if not section_text.strip():
+                _manualize_progress[doc_id]["done"] = i + 1
                 continue
-            result = _process_one_window(section_text, i, len(sections))
+            result = _process_one_window(section_text, i, total)
             _merge_sections(all_sections, result, i)
+            _manualize_progress[doc_id]["done"] = i + 1
     else:
         # Local: 윈도우 묶어서 병렬 처리
         from concurrent.futures import ThreadPoolExecutor, as_completed
         windows = _group_sections_into_windows(sections, MANUALIZE_WINDOW_SIZE)
-        print(f"[MANUALIZE] Local parallel: {len(windows)} windows for {doc_id}")
+        total = len(windows)
+        print(f"[MANUALIZE] Local parallel: {total} windows for {doc_id}")
+        _manualize_progress[doc_id] = {"done": 0, "total": total}
 
         all_sections = {}
-        if len(windows) == 1:
+        if total == 1:
             result = _process_one_window(windows[0], 0, 1)
             _merge_sections(all_sections, result, 0)
+            _manualize_progress[doc_id]["done"] = 1
         else:
-            with ThreadPoolExecutor(max_workers=len(windows)) as executor:
+            with ThreadPoolExecutor(max_workers=total) as executor:
                 futures = {
-                    executor.submit(_process_one_window, w, i, len(windows)): i
+                    executor.submit(_process_one_window, w, i, total): i
                     for i, w in enumerate(windows)
                 }
                 for future in as_completed(futures):
                     i = futures[future]
                     result = future.result()
                     _merge_sections(all_sections, result, i)
+                    _manualize_progress[doc_id]["done"] = _manualize_progress[doc_id]["done"] + 1
+
+    # 완료 후 정리
+    _manualize_progress.pop(doc_id, None)
 
     if not all_sections:
         raise Exception("모든 처리가 실패했습니다.")

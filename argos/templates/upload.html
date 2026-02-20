@@ -376,7 +376,8 @@
         } catch(e) {}
 
         const charsLabel = totalChars > 0 ? ` · ${totalChars.toLocaleString()}자` : '';
-        const splitLabel = windowCount > 1 ? ` (${windowCount}${ccMode === 'remote' ? '섹션' : '분할'})` : '';
+        const unitLabel = ccMode === 'remote' ? '섹션' : '분할';
+        const splitLabel = windowCount > 1 ? ` (${windowCount}${unitLabel})` : '';
         if (lamp) { lamp.style.display = 'inline'; lamp.textContent = `Manualizing...${charsLabel}${splitLabel}`; }
         let timerInterval = null;
         const timerStart = Date.now();
@@ -390,13 +391,28 @@
             }, 100);
         }
 
+        // 진행률 폴링 (2초 간격)
+        let progressIv = null;
+        if (windowCount > 1) {
+            progressIv = setInterval(async () => {
+                try {
+                    const pRes = await fetch(`/api/doc/${docId}/manualize-progress`);
+                    const p = await pRes.json();
+                    if (p.total > 0 && lamp) {
+                        lamp.textContent = `Manualizing...${charsLabel} · ${p.done}/${p.total}${unitLabel}`;
+                    }
+                } catch(e) {}
+            }, 2000);
+        }
+
         try {
             const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
             const res = await fetch(url, { method: 'POST' });
             const data = await res.json();
 
-            // Stop timer
+            // Stop timer + progress polling
             if (timerInterval) clearInterval(timerInterval);
+            if (progressIv) clearInterval(progressIv);
             const _elapsedRaw = (Date.now() - timerStart) / 1000;
             const _em = Math.floor(_elapsedRaw / 60);
             const _es = (_elapsedRaw % 60).toFixed(1);
@@ -432,6 +448,7 @@
             });
         } catch(e) {
             if (timerInterval) clearInterval(timerInterval);
+            if (progressIv) clearInterval(progressIv);
             const _elapsedRaw2 = (Date.now() - timerStart) / 1000;
             const _em2 = Math.floor(_elapsedRaw2 / 60);
             const _es2 = (_elapsedRaw2 % 60).toFixed(1);
