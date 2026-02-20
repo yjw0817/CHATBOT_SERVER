@@ -372,10 +372,11 @@
             const ccData = await ccRes.json();
             totalChars = ccData.chars || 0;
             windowCount = ccData.window_count || 1;
+            ccMode = ccData.mode || 'local';
         } catch(e) {}
 
         const charsLabel = totalChars > 0 ? ` · ${totalChars.toLocaleString()}자` : '';
-        const splitLabel = windowCount > 1 ? ` (1/${windowCount} 분할)` : '';
+        const splitLabel = windowCount > 1 ? ` (${windowCount}${ccMode === 'remote' ? '섹션' : '분할'})` : '';
         if (lamp) { lamp.style.display = 'inline'; lamp.textContent = `Manualizing...${charsLabel}${splitLabel}`; }
         let timerInterval = null;
         const timerStart = Date.now();

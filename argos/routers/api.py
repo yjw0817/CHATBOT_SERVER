@@ -338,12 +338,14 @@ def get_char_count(doc_id: str):
         raise HTTPException(status_code=404, detail="Document not found")
     raw_text = row["raw_text"] or ""
     chars = len(raw_text)
+    mode = get_llm_mode()
     window_count = 1
-    if chars > MANUALIZE_HARD_LIMIT:
-        sections = _split_by_headings(raw_text)
-        windows = _group_sections_into_windows(sections, MANUALIZE_WINDOW_SIZE)
+    if mode == "remote":
+        window_count = len(_split_by_headings(raw_text))
+    elif chars > MANUALIZE_HARD_LIMIT:
+        windows = _group_sections_into_windows(_split_by_headings(raw_text), MANUALIZE_WINDOW_SIZE)
         window_count = len(windows)
-    return {"chars": chars, "window_count": window_count, "hard_limit": MANUALIZE_HARD_LIMIT}
+    return {"chars": chars, "window_count": window_count, "hard_limit": MANUALIZE_HARD_LIMIT, "mode": mode}
 
 
 # ============ STEP 2: MANUALIZE ============
