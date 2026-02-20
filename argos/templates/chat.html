@@ -11,6 +11,12 @@
             <option value="{{ apt.apt_id }}">{{ apt.name }} ({{ apt.apt_id }})</option>
             {% endfor %}
         </select>
+        <button id="chat-btn-local" onclick="switchChatMode('local')" style="padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Local</button>
+        <button id="chat-btn-remote" onclick="switchChatMode('remote')" style="padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Remote</button>
+        <select id="model-select">
+            <option value="">-- 모델 로딩... --</option>
+        </select>
+        <span id="model-badge" class="badge badge-pending" style="cursor:pointer;" title="현재 LLM 모델">loading...</span>
         <span id="status-badge" class="badge" style="display:none;"></span>
     </div>
 
@@ -68,7 +74,8 @@
                     apt_id: currentAptId,
                     client_id: 'web-user',
                     conversation_id: conversationId,
-                    message: message
+                    message: message,
+                    model: document.getElementById('model-select').value || null
                 })
             });
             const data = await res.json();
@@ -94,6 +101,102 @@
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
         return msgDiv;
     }
+
+    // Chat: mode toggle + dynamic model list
+    const EMBED_MODELS = ['bge-m3', 'nomic-embed-text'];
+
+    function updateChatModeUI(mode) {
+        const btnL = document.getElementById('chat-btn-local');
+        const btnR = document.getElementById('chat-btn-remote');
+        const active = 'padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid transparent;cursor:pointer;font-weight:700;';
+        const inactive = 'padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;';
+        if (btnL && btnR) {
+            if (mode === 'local') {
+                btnL.style.cssText = active + 'background:#10b981;color:white;';
+                btnR.style.cssText = inactive;
+            } else {
+                btnR.style.cssText = active + 'background:#3b82f6;color:white;';
+                btnL.style.cssText = inactive;
+            }
+        }
+    }
+
+    function populateChatModelSelect(rawModels, currentModel) {
+        const sel = document.getElementById('model-select');
+        const badge = document.getElementById('model-badge');
+        const saved = localStorage.getItem('chat_model');
+        const models = (rawModels || []).filter(m => !EMBED_MODELS.some(e => m.name.startsWith(e)));
+        sel.innerHTML = '<option value="">-- 모델 선택 --</option>';
+        let target = null;
+        const names = models.map(m => m.name);
+        if (saved && names.includes(saved)) target = saved;
+        else if (currentModel && names.includes(currentModel)) target = currentModel;
+        else if (models.length) target = models[0].name;
+        for (const m of models) {
+            const opt = document.createElement('option');
+            opt.value = m.name;
+            opt.textContent = m.name + (m.size_gb ? ` (${m.size_gb}GB)` : '');
+            if (m.name === target) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        if (target) localStorage.setItem('chat_model', target);
+        badge.textContent = sel.value || 'default';
+    }
+
+    async function loadChatModelList() {
+        const sel = document.getElementById('model-select');
+        sel.innerHTML = '<option value="">모델 로딩...</option>';
+        try {
+            const res = await fetch('/api/llm/models');
+            const data = await res.json();
+            populateChatModelSelect(data.models, data.current);
+        } catch(e) {
+            console.warn('Model list load failed:', e);
+            document.getElementById('model-badge').textContent = 'error';
+        }
+    }
+
+    async function switchChatMode(mode) {
+        const btnL = document.getElementById('chat-btn-local');
+        const btnR = document.getElementById('chat-btn-remote');
+        if (btnL) btnL.disabled = true;
+        if (btnR) btnR.disabled = true;
+        document.getElementById('model-select').innerHTML = '<option value="">모델 로딩...</option>';
+        try {
+            const res = await fetch('/api/llm/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `mode=${mode}`
+            });
+            const data = await res.json();
+            if (data.success) {
+                updateChatModeUI(data.mode);
+                if (data.models) populateChatModelSelect(data.models, data.info?.model);
+            } else {
+                alert(data.detail || 'Mode 전환 실패');
+            }
+        } catch(e) { alert('Mode 전환 오류: ' + e.message); }
+        finally {
+            if (btnL) btnL.disabled = false;
+            if (btnR) btnR.disabled = false;
+        }
+    }
+
+    // Init: load mode + models
+    (async function() {
+        try {
+            const res = await fetch('/api/llm/mode');
+            const data = await res.json();
+            updateChatModeUI(data.mode);
+        } catch(e) {}
+        await loadChatModelList();
+    })();
+
+    document.getElementById('model-select').addEventListener('change', function () {
+        const model = this.value;
+        localStorage.setItem('chat_model', model);
+        document.getElementById('model-badge').textContent = model || 'default';
+    });
 
     function addAssistantMessage(data) {
         const messagesDiv = document.getElementById('chat-messages');
@@ -124,7 +227,18 @@
 
         // Next question
         if (data.next_question) {
-            html += `<div class="next-question">💡 ${data.next_question}</div>`;
+            html += `<div class="next-question">${data.next_question}</div>`;
+        }
+
+        // Timing info
+        if (data.timing) {
+            const t = data.timing;
+            const parts = [];
+            if (t.rag_s !== undefined) parts.push(`RAG ${t.rag_s}s`);
+            if (t.llm_s !== undefined) parts.push(`LLM ${t.llm_s}s`);
+            if (t.total_s !== undefined) parts.push(`Total ${t.total_s}s`);
+            const method = data.search_method === 'faiss' ? 'FAISS' : 'Keyword';
+            html += `<div class="timing-info">${method} | ${parts.join(' | ')}</div>`;
         }
 
         msgDiv.innerHTML = html;
@@ -174,6 +288,23 @@
 
     .message.assistant {
         max-width: 90%;
+    }
+
+    .timing-info {
+        margin-top: 0.5rem;
+        padding: 0.25rem 0.5rem;
+        background: #e5e7eb;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        color: #6b7280;
+        font-family: monospace;
+    }
+
+    #model-select {
+        padding: 0.4rem;
+        border-radius: 4px;
+        border: 1px solid #d1d5db;
+        font-size: 0.9rem;
     }
 </style>
 {% endblock %}

@@ -39,8 +39,21 @@ def upload_page(request: Request):
     # Check which documents have existing manual sections
     cursor.execute("SELECT DISTINCT doc_id FROM manual_sections")
     docs_with_manual = {row["doc_id"] for row in cursor.fetchall()}
+    # Check which documents have ALL sections PASS (Gate 전체 통과)
+    cursor.execute("""
+        SELECT doc_id,
+               COUNT(*) as total,
+               SUM(CASE WHEN gate_status = 'PASS' THEN 1 ELSE 0 END) as pass_count
+        FROM manual_sections GROUP BY doc_id
+    """)
+    docs_all_pass = {row["doc_id"] for row in cursor.fetchall() if row["total"] == row["pass_count"] and row["total"] > 0}
+    # Check which documents have RAG chunks (published)
+    cursor.execute("SELECT DISTINCT doc_id FROM chunks")
+    docs_with_chunks = {row["doc_id"] for row in cursor.fetchall()}
     for doc in documents:
         doc["has_manual"] = doc["doc_id"] in docs_with_manual
+        doc["has_pass"] = doc["doc_id"] in docs_all_pass
+        doc["has_rag"] = doc["doc_id"] in docs_with_chunks
     
     conn.close()
     

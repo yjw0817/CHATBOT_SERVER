@@ -2,7 +2,18 @@
 
 {% block content %}
 <section class="upload-section">
-    <h2>📤 문서 업로드 & 매뉴얼화</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <h2 style="margin:0;">📤 문서 업로드 & 매뉴얼화</h2>
+        <div style="display:flex;align-items:center;gap:0.5rem;font-size:13px;">
+            <span style="color:#6b7280;">LLM:</span>
+            <button id="main-btn-local" class="btn-small" onclick="switchLlmMode('local')" style="padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Local</button>
+            <button id="main-btn-remote" class="btn-small" onclick="switchLlmMode('remote')" style="padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Remote</button>
+            <select id="main-model-select" style="padding:2px 6px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">
+                <option value="">모델 로딩...</option>
+            </select>
+            <span id="main-mode-info" style="color:#9ca3af;font-size:11px;"></span>
+        </div>
+    </div>
 
     <!-- Create Apartment -->
     <div class="card">
@@ -68,8 +79,11 @@
                 <td>{{ doc.apt_name or doc.apt_id }}</td>
                 <td>{{ doc.title }}</td>
                 <td>v{{ doc.version }}</td>
-                <td><span class="badge badge-{{ doc.status|lower }}">{{ doc.status }}</span></td>
-                <td>{{ doc.created_at[:16] }}</td>
+                <td>
+                    <span class="badge badge-{{ doc.status|lower }}">{{ doc.status }}</span>
+                    {% if doc.has_rag %}<span class="rag-check" title="RAG 데이터화 완료">&#10003;</span>{% endif %}
+                </td>
+                <td>{{ doc.created_at.strftime('%Y-%m-%d %H:%M') if doc.created_at else '' }}</td>
                 <td class="actions-cell">
                     {% if doc.status != 'ARCHIVED' %}
                     <button class="btn-small btn-extract" onclick="extractText('{{ doc.doc_id }}')">📄 Extract</button>
@@ -81,7 +95,8 @@
                         Manualize</button>
                     {% endif %}
                     <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}"
-                        onclick="approve('{{ doc.doc_id }}')">⚙️ RAG 데이터화</button>
+                        onclick="approve('{{ doc.doc_id }}')"
+                        {% if not doc.has_pass %}disabled style="opacity:0.4;cursor:not-allowed;"{% endif %}>⚙️ RAG 데이터화</button>
                     <button class="btn-small" style="background:#f87171;color:white;" onclick="deleteDocument('{{ doc.doc_id }}', '{{ doc.title }}')">🗑️</button>
                     {% else %}
                     <span class="text-muted">Archived</span>
@@ -113,7 +128,17 @@
     <div class="modal-content editor-modal-content" style="max-width: 1200px; width: 95%;">
         <div class="editor-header">
             <span class="close" onclick="closeEditor()">&times;</span>
-            <h3>✍️ 매뉴얼 에디터</h3>
+            <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+                <h3 style="margin:0;">✍️ 매뉴얼 에디터</h3>
+                <button id="btn-mode-local" class="btn-small" onclick="switchLlmMode('local')" style="padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Local</button>
+                <button id="btn-mode-remote" class="btn-small" onclick="switchLlmMode('remote')" style="padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Remote</button>
+                <select id="editor-model-select" style="padding:2px 6px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">
+                    <option value="">모델 로딩...</option>
+                </select>
+                <span id="llm-mode-info" style="color:#9ca3af;font-size:10px;"></span>
+                <span id="manualize-status" class="manualize-lamp" style="display:none;">Manualizing</span>
+                <span id="manualize-timer" style="display:none;font-size:12px;color:#6b7280;font-variant-numeric:tabular-nums;">0.0s</span>
+            </div>
             <p class="text-muted">내용을 직접 수정하거나 AI의 도움을 받아 보강할 수 있습니다.</p>
         </div>
 
@@ -123,9 +148,11 @@
 
         <div class="editor-footer">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
-            <button class="btn" style="background:#f59e0b;" onclick="closeEditor(); manualize(currentDocId, true)">🔄 다시
-                Manualize</button>
-            <button id="btn-bulk-fill" class="btn" style="background:#d97706;" onclick="bulkFillNeedFix()">🔧 NEED_FIX 일괄 보강</button>
+            <button class="btn" style="background:#f59e0b;" onclick="manualize(currentDocId, true)">🔄 다시 Manualize</button>
+            <button id="btn-fill-all" class="btn" style="background:#10b981;" onclick="fillAll()">① 맥락 보강(전체)</button>
+            <button id="btn-refine-all" class="btn" style="background:#6366f1;" onclick="refineAll()">② RAG 최적화(전체)</button>
+            <button id="btn-gate-all" class="btn" style="background:#f59e0b;" onclick="gateAll()">③ Gate(전체)</button>
+            <button id="btn-publish-all" class="btn" style="background:#7c3aed;opacity:0.4;cursor:not-allowed;" onclick="publishAll()" disabled>📦 RAG 반영</button>
             <button id="save-editor-btn" class="btn" onclick="saveEditor()">💾 저장하기</button>
         </div>
     </div>
@@ -158,40 +185,263 @@
 <script>
     let currentDocId = null;
 
+    // ── LLM Controls (Main + Editor share mode/model) ──
+    const EMBED_MODELS = ['bge-m3', 'nomic-embed-text'];
+    // All mode button pairs (main page + editor modal)
+    const MODE_BTN_IDS = [
+        { local: 'main-btn-local', remote: 'main-btn-remote', info: 'main-mode-info' },
+        { local: 'btn-mode-local', remote: 'btn-mode-remote', info: 'llm-mode-info' }
+    ];
+    // All model select elements (main page + editor modal)
+    const MODEL_SELECT_IDS = ['main-model-select', 'editor-model-select'];
+
+    function updateModeUI(mode, info) {
+        for (const ids of MODE_BTN_IDS) {
+            const btnL = document.getElementById(ids.local);
+            const btnR = document.getElementById(ids.remote);
+            const infoEl = document.getElementById(ids.info);
+            if (btnL && btnR) {
+                const active = 'padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid transparent;cursor:pointer;font-weight:700;';
+                const inactive = 'padding:3px 10px;border-radius:12px;font-size:12px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;';
+                if (mode === 'local') {
+                    btnL.style.cssText = active + 'background:#10b981;color:white;';
+                    btnR.style.cssText = inactive;
+                } else {
+                    btnR.style.cssText = active + 'background:#3b82f6;color:white;';
+                    btnL.style.cssText = inactive;
+                }
+            }
+            if (infoEl && info) {
+                infoEl.textContent = `${info.model} → ${info.base_url || '?'}`;
+            }
+        }
+    }
+
+    function _populateAllSelects(rawModels, currentModel) {
+        const saved = localStorage.getItem('editor_model');
+        const models = (rawModels || []).filter(m => !EMBED_MODELS.some(e => m.name.startsWith(e)));
+        const modelNames = models.map(m => m.name);
+        let target = null;
+        if (saved && modelNames.includes(saved)) target = saved;
+        else if (currentModel && modelNames.includes(currentModel)) target = currentModel;
+        else if (models.length) target = models[0].name;
+
+        for (const selId of MODEL_SELECT_IDS) {
+            const sel = document.getElementById(selId);
+            if (!sel) continue;
+            sel.innerHTML = '';
+            if (!models.length) { sel.innerHTML = '<option value="">모델 없음</option>'; continue; }
+            for (const m of models) {
+                const opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name + (m.size_gb ? ` (${m.size_gb}GB)` : '');
+                if (m.name === target) opt.selected = true;
+                sel.appendChild(opt);
+            }
+        }
+        if (target) localStorage.setItem('editor_model', target);
+        return target;
+    }
+
+    function _setAllSelectsLoading() {
+        for (const selId of MODEL_SELECT_IDS) {
+            const sel = document.getElementById(selId);
+            if (sel) sel.innerHTML = '<option value="">모델 로딩...</option>';
+        }
+    }
+
+    async function _setServerModel(model) {
+        try {
+            const res = await fetch('/api/llm/model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `model=${encodeURIComponent(model)}`
+            });
+            const data = await res.json();
+            if (data.success) updateModeUI(data.info?.mode, data.info);
+        } catch(e) { console.warn('Model switch failed:', e); }
+    }
+
+    async function switchLlmMode(mode) {
+        // Disable all mode buttons
+        for (const ids of MODE_BTN_IDS) {
+            const bL = document.getElementById(ids.local); if (bL) bL.disabled = true;
+            const bR = document.getElementById(ids.remote); if (bR) bR.disabled = true;
+        }
+        _setAllSelectsLoading();
+        try {
+            const res = await fetch('/api/llm/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `mode=${mode}`
+            });
+            const data = await res.json();
+            if (data.success) {
+                updateModeUI(data.mode, data.info);
+                if (data.models) {
+                    const selected = _populateAllSelects(data.models, data.info?.model);
+                    if (selected) await _setServerModel(selected);
+                }
+            } else {
+                alert(data.detail || 'Mode 전환 실패');
+            }
+        } catch(e) { alert('Mode 전환 오류: ' + e.message); }
+        finally {
+            for (const ids of MODE_BTN_IDS) {
+                const bL = document.getElementById(ids.local); if (bL) bL.disabled = false;
+                const bR = document.getElementById(ids.remote); if (bR) bR.disabled = false;
+            }
+        }
+    }
+
+    async function loadModelList() {
+        _setAllSelectsLoading();
+        try {
+            const res = await fetch('/api/llm/models');
+            const data = await res.json();
+            const selected = _populateAllSelects(data.models, data.current);
+            if (selected) await _setServerModel(selected);
+        } catch(e) {
+            console.warn('Model list load failed:', e);
+            for (const selId of MODEL_SELECT_IDS) {
+                const sel = document.getElementById(selId);
+                if (sel) sel.innerHTML = '<option value="">로드 실패</option>';
+            }
+        }
+    }
+
+    // Model select change handler (shared for both selects)
+    function _onModelSelectChange(e) {
+        if (!e.target.value) return;
+        const model = e.target.value;
+        localStorage.setItem('editor_model', model);
+        // Sync the other select
+        for (const selId of MODEL_SELECT_IDS) {
+            const sel = document.getElementById(selId);
+            if (sel && sel !== e.target) sel.value = model;
+        }
+        _setServerModel(model);
+    }
+    for (const selId of MODEL_SELECT_IDS) {
+        const sel = document.getElementById(selId);
+        if (sel) sel.addEventListener('change', _onModelSelectChange);
+    }
+
+    // On page load
+    document.addEventListener('DOMContentLoaded', async () => {
+        try {
+            const res = await fetch('/api/llm/mode');
+            const data = await res.json();
+            updateModeUI(data.mode, data.info);
+        } catch(e) {}
+        await loadModelList();
+    });
+
     async function manualize(docId, force = false) {
         currentDocId = docId;
+
+        // Step 1: Check for existing sections (non-force only)
         if (!force) {
             showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
-        } else {
-            showModal('AI 분석 중...', `
-                <div style="text-align:center; padding: 1rem;">
-                    <div class="spinner"></div>
-                    <p><strong>AI가 문서를 정밀 분석하여 매뉴얼을 생성하고 있습니다.</strong></p>
-                    <p style="font-size:0.85rem; color:#6b7280; margin-top:0.5rem;">
-                        문서의 양에 따라 10~30초 정도 소요될 수 있습니다.<br>
-                        완료되면 자동으로 에디터가 열립니다.
-                    </p>
-                </div>
-            `);
-        }
-
-        const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
-        const { ok, data } = await apiCall(url);
-
-        if (ok) {
-            if (data.cached && !force) {
+            const secRes = await fetch(`/api/doc/${docId}/sections`);
+            const secData = await secRes.json();
+            const existingSections = secData.sections || secData;
+            const completedPhases = secData.completed_phases || '';
+            if (existingSections && existingSections.length > 0) {
+                const details = {};
+                existingSections.forEach(s => details[s.section_name] = s.section_text);
+                closeModal();
                 showConfirmModalForCache(
                     '이미 매뉴얼화가 완료되었습니다',
-                    `이미 생성된 섹션(${data.sections.length}개)이 있습니다. 어떻게 하시겠습니까?`,
-                    () => openEditorWithData(docId, data),
+                    `이미 생성된 섹션(${existingSections.length}개)이 있습니다. 어떻게 하시겠습니까?`,
+                    () => { openEditorWithData(docId, { section_details: details, todo_questions: [], sections_gate: existingSections }); _restorePhases(completedPhases, existingSections.length); },
                     () => manualize(docId, true)
                 );
-            } else {
-                openEditorWithData(docId, data);
-                closeModal();
+                return;
             }
-        } else {
-            showModal('오류', data.detail || data.error);
+        }
+
+        // Step 2: Pre-fetch char count, show Manualizing lamp + timer
+        const lamp = document.getElementById('manualize-status');
+        const timerEl = document.getElementById('manualize-timer');
+
+        let totalChars = 0;
+        let windowCount = 1;
+        try {
+            const ccRes = await fetch(`/api/doc/${docId}/char-count`);
+            const ccData = await ccRes.json();
+            totalChars = ccData.chars || 0;
+            windowCount = ccData.window_count || 1;
+        } catch(e) {}
+
+        const charsLabel = totalChars > 0 ? ` · ${totalChars.toLocaleString()}자` : '';
+        const splitLabel = windowCount > 1 ? ` (1/${windowCount} 분할)` : '';
+        if (lamp) { lamp.style.display = 'inline'; lamp.textContent = `Manualizing...${charsLabel}${splitLabel}`; }
+        let timerInterval = null;
+        const timerStart = Date.now();
+        if (timerEl) {
+            timerEl.style.display = 'inline';
+            timerInterval = setInterval(() => {
+                const _sec = (Date.now() - timerStart) / 1000;
+                const _m = Math.floor(_sec / 60);
+                const _s = (_sec % 60).toFixed(1);
+                timerEl.textContent = _m > 0 ? `${_m}:${_s.padStart(4,'0')}` : `${_s}s`;
+            }, 100);
+        }
+
+        try {
+            const url = force ? `/api/doc/${docId}/manualize?force=true` : `/api/doc/${docId}/manualize`;
+            const res = await fetch(url, { method: 'POST' });
+            const data = await res.json();
+
+            // Stop timer
+            if (timerInterval) clearInterval(timerInterval);
+            const _elapsedRaw = (Date.now() - timerStart) / 1000;
+            const _em = Math.floor(_elapsedRaw / 60);
+            const _es = (_elapsedRaw % 60).toFixed(1);
+            const elapsed = _em > 0 ? `${_em}분 ${_es}초` : `${_es}초`;
+            if (timerEl) timerEl.style.display = 'none';
+
+            if (!res.ok || !data.success) {
+                // ── 실패 표시 ──
+                if (lamp) {
+                    lamp.textContent = `Manualize 실패`;
+                    lamp.style.cssText = 'display:inline;background:#fecaca;color:#991b1b;animation:none;padding:2px 10px;border-radius:8px;font-size:12px;font-weight:700;';
+                }
+                showModal('Manualize 실패', `원인: ${data.detail || '알 수 없는 오류'}\n소요시간: ${elapsed}s`);
+                return;
+            }
+
+            // ── 성공 표시 ──
+            const sectionCount = Object.keys(data.section_details || {}).length;
+            const charInfo = data.raw_text_chars ? `${data.raw_text_chars.toLocaleString()}자` : '';
+            const winInfo = (data.window_count || 1) > 1 ? ` · ${data.window_count}분할` : '';
+            if (lamp) {
+                lamp.textContent = `Manualize 완료 · ${sectionCount}개 섹션 · ${elapsed}s${charInfo ? ' · ' + charInfo : ''}${winInfo}`;
+                lamp.style.cssText = 'display:inline;background:#dcfce7;color:#166534;animation:none;padding:2px 10px;border-radius:8px;font-size:12px;font-weight:700;';
+                setTimeout(() => { lamp.style.display = 'none'; lamp.style.cssText = ''; }, 8000);
+            }
+
+            // Open editor with results
+            openEditorWithData(docId, {
+                section_details: data.section_details,
+                todo_questions: data.todo_questions || [],
+                change_summary: data.change_summary || '',
+                gate_results: data.gate_results || {},
+            });
+        } catch(e) {
+            if (timerInterval) clearInterval(timerInterval);
+            const _elapsedRaw2 = (Date.now() - timerStart) / 1000;
+            const _em2 = Math.floor(_elapsedRaw2 / 60);
+            const _es2 = (_elapsedRaw2 % 60).toFixed(1);
+            const elapsed = _em2 > 0 ? `${_em2}분 ${_es2}초` : `${_es2}초`;
+            if (timerEl) timerEl.style.display = 'none';
+            // ── 네트워크 오류 표시 ──
+            if (lamp) {
+                lamp.textContent = `Manualize 실패`;
+                lamp.style.cssText = 'display:inline;background:#fecaca;color:#991b1b;animation:none;padding:2px 10px;border-radius:8px;font-size:12px;font-weight:700;';
+            }
+            showModal('Manualize 실패', `네트워크 오류: ${e.message}\n소요시간: ${elapsed}s`);
         }
     }
 
@@ -224,30 +474,82 @@
         if (!status) return '';
         const hints = {
             'PASS': '<div style="font-size:12px;color:#166534;margin-bottom:6px;">✅ RAG 반영 가능 (PASS)</div>',
-            'NEED_FIX': '<div style="font-size:12px;color:#92400e;margin-bottom:6px;">🔧 Fill 보강 → Gate 재검증 필요</div>',
+            'NEED_FIX': '<div style="font-size:12px;color:#92400e;margin-bottom:6px;">🔧 수정 후 Gate 재검증 필요</div>',
             'BLOCK': '<div style="font-size:12px;color:#991b1b;margin-bottom:6px;">⛔ 수동 수정 필요 (BLOCK)</div>'
         };
         return hints[status] || '';
     }
 
-    function renderGateReasonsHTML(gateStatus, gateReasonsJson) {
-        if (!gateStatus || gateStatus === 'PASS') return '';
+    function renderGateReasonsHTML(gateStatus, gateReasonsJson, sectionIdx, timeS) {
         let reasons = [];
         try { reasons = JSON.parse(gateReasonsJson || '[]'); } catch(e) {}
-        if (!reasons.length) return '';
-        const color = gateStatus === 'BLOCK' ? '#991b1b' : '#92400e';
-        const bg = gateStatus === 'BLOCK' ? '#fef2f2' : '#fffbeb';
-        const border = gateStatus === 'BLOCK' ? '#fecaca' : '#fde68a';
-        const label = gateStatus === 'BLOCK' ? '🚫 BLOCK' : '⚠️ NEED_FIX';
-        return `<div class="gate-reasons-box" style="background:${bg};color:${color};border:1px solid ${border};border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:13px;">
-            <strong>${label}</strong>
-            <ul style="margin:4px 0 0 1.2rem;padding:0;">${reasons.map(r => `<li>${r.message || r}</li>`).join('')}</ul>
+        if (!reasons.length && !timeS) return '';
+        const active = reasons.filter(r => !r.dismissed);
+        const effectiveStatus = active.length === 0 ? 'PASS' : gateStatus;
+        if (effectiveStatus === 'PASS' && !reasons.some(r => r.dismissed) && !timeS) return '';
+        const color = effectiveStatus === 'BLOCK' ? '#991b1b' : effectiveStatus === 'PASS' ? '#166534' : '#92400e';
+        const bg = effectiveStatus === 'BLOCK' ? '#fef2f2' : effectiveStatus === 'PASS' ? '#f0fdf4' : '#fffbeb';
+        const border = effectiveStatus === 'BLOCK' ? '#fecaca' : effectiveStatus === 'PASS' ? '#bbf7d0' : '#fde68a';
+        const label = effectiveStatus === 'BLOCK' ? 'BLOCK' : effectiveStatus === 'PASS' ? 'PASS' + (reasons.some(r => r.dismissed) ? ' (무시됨 포함)' : '') : 'NEED_FIX';
+        const timeLabel = timeS ? `<span style="font-size:11px;color:#6b7280;font-family:monospace;">${timeS}s</span>` : '';
+        return `<div class="gate-reasons-box" id="gate-reasons-${sectionIdx}" style="background:${bg};color:${color};border:1px solid ${border};border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:13px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong>${label}${active.length ? ' — ' + active.length + '건' : ''}</strong>
+                ${timeLabel}
+            </div>
+            <div id="gate-unmatched-${sectionIdx}"></div>
         </div>`;
+    }
+
+    function applyGateSuggestion(sectionIdx, reasonIndex) {
+        const textarea = document.getElementById(`editor-${sectionIdx}`);
+        if (!textarea) return;
+        let reasons = [];
+        try {
+            let raw = textarea.dataset.gateReasons || '[]';
+            reasons = JSON.parse(raw);
+            if (typeof reasons === 'string') reasons = JSON.parse(reasons);
+        } catch(e) { return; }
+        const r = reasons[reasonIndex];
+        if (!r || !r.fix_suggestion) return;
+
+        const text = textarea.value;
+        const hint = (r.location_hint || '').trim();
+        let insertPos = -1;
+
+        // Find the hint location in text, insert suggestion after that line
+        if (hint) {
+            const hintIdx = text.indexOf(hint);
+            if (hintIdx >= 0) {
+                const lineEnd = text.indexOf('\n', hintIdx);
+                insertPos = lineEnd >= 0 ? lineEnd + 1 : text.length;
+            }
+        }
+
+        const suggestionLine = `[TODO: ${r.fix_suggestion}]\n`;
+        if (insertPos >= 0) {
+            textarea.value = text.substring(0, insertPos) + suggestionLine + text.substring(insertPos);
+        } else {
+            // Fallback: append at end
+            textarea.value = text + '\n' + suggestionLine;
+        }
+
+        // Trigger input event for auto-resize
+        textarea.dispatchEvent(new Event('input'));
+        // Scroll to inserted position
+        if (insertPos >= 0) {
+            textarea.setSelectionRange(insertPos, insertPos + suggestionLine.length);
+            textarea.focus();
+        }
     }
 
     function openEditorWithData(docId, data) {
         currentDocId = docId;
         sourceMapCache = null;
+        // RAG 반영 버튼 초기화: 항상 disabled로 시작
+        _disableBtn('btn-publish-all', '📦 RAG 반영');
+        // Load model list and restore saved selection
+        loadModelList();
         const container = document.getElementById('editor-container');
         container.innerHTML = '';
 
@@ -273,14 +575,25 @@
 
         // Build gate info map from sections data OR gate_results (from manualize)
         const gateInfo = {};
+        const evidenceInfo = {};
+        const mergeStatusInfo = {};
         if (data.sections_gate) {
             data.sections_gate.forEach(s => {
                 gateInfo[s.section_name] = { status: s.gate_status, reasons: s.gate_reasons_json, stale: s.gate_stale };
+                if (s.evidence_json) evidenceInfo[s.section_name] = s.evidence_json;
+                if (s.merge_status) mergeStatusInfo[s.section_name] = s.merge_status;
             });
         }
         if (data.gate_results) {
             Object.entries(data.gate_results).forEach(([name, g]) => {
                 gateInfo[name] = { status: g.status, reasons: JSON.stringify(g.reasons || []), stale: 0 };
+            });
+        }
+        // evidence_summary from manualize response
+        if (data.evidence_summary) {
+            Object.entries(data.evidence_summary).forEach(([name, info]) => {
+                if (!evidenceInfo[name]) evidenceInfo[name] = null;
+                evidenceInfo[name + '__summary'] = info;
             });
         }
 
@@ -289,7 +602,7 @@
             const idx = sectionIndex++;
             const gate = gateInfo[name] || {};
             const isStale = gate.stale === 1 || gate.stale === true;
-            const gateHTML = renderGateReasonsHTML(gate.status, gate.reasons);
+            const gateHTML = renderGateReasonsHTML(gate.status, gate.reasons, idx);
             const gateBadge = isStale
                 ? '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">⚠️ 미검증</span>'
                 : _gateBadgeHTML(gate.status);
@@ -297,26 +610,53 @@
                 ? '<div style="font-size:12px;color:#d97706;margin-bottom:6px;">⚠️ 변경됨: Gate 재검증 필요</div>'
                 : _gateHintHTML(gate.status);
             const fillDisabled = (!isStale && (gate.status === 'PASS' || gate.status === 'BLOCK')) ? 'disabled style="background:#10b981;color:white;opacity:0.4;cursor:not-allowed;"' : 'style="background:#10b981;color:white;"';
+
+            // Evidence button
+            let evidenceCount = 0;
+            let evidenceRaw = evidenceInfo[name] || null;
+            if (evidenceRaw) {
+                try {
+                    const spans = typeof evidenceRaw === 'string' ? JSON.parse(evidenceRaw) : evidenceRaw;
+                    if (Array.isArray(spans)) evidenceCount = spans.length;
+                } catch(e) {}
+            }
+            const evidenceBtnHTML = evidenceCount > 0
+                ? `<button class="btn-small" style="background:#8b5cf6;color:white;font-size:11px;padding:2px 6px;" onclick="toggleEvidence(${idx})">📎 Evidence (${evidenceCount})</button>`
+                : '';
+
+            // Appendix styling
+            const isAppendix = name.startsWith('[부록]') || mergeStatusInfo[name] === 'APPENDIX';
+            const cardBg = isAppendix ? 'background:#fff7ed;border-left:4px solid #fb923c;' : '';
+
             const secDiv = document.createElement('div');
+            secDiv.id = `section-card-${idx}`;
             secDiv.className = 'card';
-            secDiv.style.margin = '0';
+            secDiv.style.cssText = 'margin:0;transition:opacity 0.3s,box-shadow 0.3s;' + cardBg;
             secDiv.innerHTML = `
                 ${gateHTML}
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                    <strong>${name} ${gateBadge}</strong>
+                    <div style="display:flex; align-items:center; gap:0.4rem;">
+                        <strong>${name} ${gateBadge}</strong>
+                        <span id="phase-done-${idx}" style="display:none;font-size:12px;font-weight:700;padding:1px 6px;border-radius:4px;"></span>
+                        ${evidenceBtnHTML}
+                        <button id="btn-highlight-${idx}" class="btn-small" style="background:#f59e0b;color:white;font-size:11px;padding:2px 6px;${(gate.status === 'NEED_FIX' || gate.status === 'BLOCK') ? '' : 'display:none;'}" onclick="toggleHighlight(${idx})">🔍 문제 표시</button>
+                    </div>
                     <div style="display:flex; gap:0.25rem; align-items:center;">
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
-                        <button id="btn-highlight-${idx}" class="btn-small" style="background:#f59e0b;color:white;${(gate.status === 'NEED_FIX' || gate.status === 'BLOCK') ? '' : 'display:none;'}" onclick="toggleHighlight(${idx})">🔍 문제 표시</button>
-                        <span id="step1-done-${idx}" style="display:none; color:#10b981; font-weight:700; font-size:13px;">✅</span>
-                        <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
-                        <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white; opacity:0.5;" onclick="aiRefine(${idx}, 'refine')" disabled>② RAG 최적화</button>
-                        <button id="btn-gate-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
+                        <button class="btn-small" style="background:#94a3b8;color:white;font-size:11px;" onclick="toggleMoreBtns(${idx})">⋯ 더보기</button>
+                        <span id="more-btns-${idx}" style="display:none; gap:0.25rem; align-items:center;">
+                            <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
+                            <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">② RAG 최적화</button>
+                            <button id="btn-gate-${idx}" class="btn-small" style="background:#f59e0b;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
+                        </span>
                     </div>
                 </div>
                 ${gateHint}
+                <div id="evidence-panel-${idx}" class="evidence-panel" style="display:none;" data-evidence='${(evidenceRaw || "[]").replace(/'/g, "&#39;")}'></div>
                 <div id="section-row-${idx}" class="section-row">
                     <div id="source-panel-${idx}" class="source-panel" style="display:none;"></div>
                     <div class="editor-panel">
+                        <div id="editor-label-${idx}" class="column-label" style="display:none;">매뉴얼 텍스트</div>
                         <textarea id="editor-${idx}" class="editor-textarea" data-section-name="${name.replace(/"/g, '&quot;')}" data-gate-status="${gate.status || ''}" data-gate-reasons='${(gate.reasons || "[]").replace(/'/g, "&#39;")}' oninput="autoResize(this)">${text}</textarea>
                         <div id="highlight-${idx}" class="highlight-preview" style="display:none;"></div>
                     </div>
@@ -331,14 +671,23 @@
         requestAnimationFrame(() => {
             container.querySelectorAll('.editor-textarea').forEach(ta => autoResize(ta));
         });
+
+        // RAG 반영 버튼: 모든 섹션이 PASS일 때만 활성화
+        const gateValues = Object.values(gateInfo);
+        const allPass = gateValues.length > 0 && gateValues.every(g => g.status === 'PASS');
+        if (allPass) _enableBtn('btn-publish-all', '📦 RAG 반영');
+        else _disableBtn('btn-publish-all', '📦 RAG 반영');
     }
 
     async function openEditor(docId) {
         const res = await fetch(`/api/doc/${docId}/sections`);
-        const sections = await res.json();
+        const secData = await res.json();
+        const sections = secData.sections || secData;
+        const completedPhases = secData.completed_phases || '';
         const details = {};
         sections.forEach(s => details[s.section_name] = s.section_text);
         openEditorWithData(docId, { section_details: details, todo_questions: [], sections_gate: sections });
+        _restorePhases(completedPhases, sections.length);
     }
 
     async function qualityGate(docId) {
@@ -383,29 +732,48 @@
         const textarea = document.getElementById(`editor-${idx}`);
         const sectionName = textarea.dataset.sectionName;
         const originalText = textarea.value;
+        const taskLabel = task === 'fill' ? '① 맥락 보강' : '② RAG 최적화';
+        const taskBtn = document.getElementById(task === 'fill' ? `btn-fill-${idx}` : `btn-refine-${idx}`);
+
+        // 진행 중 시각 효과
+        if (taskBtn) { taskBtn.disabled = true; taskBtn.textContent = taskLabel + ' 중...'; }
+        _markSectionWorking(idx, taskLabel + ' 중…');
         textarea.value = "AI가 작성 중입니다...";
         textarea.disabled = true;
         autoResize(textarea);
 
         const body = { text: originalText, task: task, context: sectionName };
         if (task === 'fill') {
-            body.allow_qa = 'false';  // 기본값: Q&A 신규 추가 금지 (안전)
+            body.allow_qa = 'false';
         }
-        const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const result = await res.json();
 
-        textarea.disabled = false;
-        textarea.value = originalText;
-        autoResize(textarea);
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const result = await res.json();
 
-        if (res.ok) {
-            openCompare(idx, sectionName, originalText, result.suggestion, task);
-        } else {
-            alert(result.detail || "AI 요청 실패");
+            textarea.disabled = false;
+            textarea.value = originalText;
+            autoResize(textarea);
+
+            if (res.ok) {
+                openCompare(idx, sectionName, originalText, result.suggestion, task);
+            } else {
+                alert(result.detail || "AI 요청 실패");
+            }
+        } catch(e) {
+            textarea.disabled = false;
+            textarea.value = originalText;
+            autoResize(textarea);
+            alert('AI 요청 실패: ' + e.message);
+        } finally {
+            // 효과 해제 (적용은 applyCompare에서 ✓ 처리)
+            if (taskBtn) { taskBtn.disabled = false; taskBtn.textContent = taskLabel; }
+            const badge = document.getElementById(`phase-done-${idx}`);
+            if (badge) { badge.classList.remove('badge-working'); if (badge.textContent.includes('중…')) badge.style.display = 'none'; }
         }
     }
 
@@ -413,10 +781,19 @@
         compareTargetIdx = idx;
         compareTargetTask = task;
         const taskLabel = task === 'refine' ? '② RAG 최적화' : '① 맥락 보강';
-        document.getElementById('compare-title').textContent = `🔄 ${taskLabel} 비교 — ${sectionName}`;
+        const titleEl = document.getElementById('compare-title');
+        // 변경 없으면 안내
+        const trimBefore = before.trim();
+        const trimAfter = (after || '').trim();
+        const isSame = trimBefore === trimAfter || !trimAfter;
+        if (isSame) {
+            titleEl.textContent = `🔄 ${taskLabel} 비교 — ${sectionName} (⚠️ 변경 없음 — 오른쪽을 직접 수정할 수 있습니다)`;
+        } else {
+            titleEl.textContent = `🔄 ${taskLabel} 비교 — ${sectionName}`;
+        }
         document.getElementById('compare-before').textContent = before;
         const afterTA = document.getElementById('compare-after');
-        afterTA.value = after;
+        afterTA.value = after || before;
         document.getElementById('compare-modal').style.display = 'flex';
         requestAnimationFrame(() => {
             afterTA.style.height = 'auto';
@@ -448,21 +825,15 @@
         textarea.value = document.getElementById('compare-after').value;
         autoResize(textarea);
         closeCompare();
-        await saveEditor();
+        await saveEditor(true);
+        // Snapshot AI text for this section
+        const sectionName = textarea.dataset.sectionName;
+        await _snapshotAiTextSection(currentDocId, sectionName);
 
-        // Mark step 1 done and enable step 2
-        if (task === 'fill') {
-            const doneEl = document.getElementById(`step1-done-${idx}`);
-            if (doneEl) doneEl.style.display = 'inline';
-            const refineBtn = document.getElementById(`btn-refine-${idx}`);
-            if (refineBtn) {
-                refineBtn.disabled = false;
-                refineBtn.style.opacity = '1';
-            }
-        }
+        // Mark step done
+        _markSectionBtnDone(idx, task);
 
         // Set gate_stale flag (saved without gate re-check)
-        const sectionName = textarea.dataset.sectionName;
         await setGateStale(sectionName);
         textarea.dataset.gateStatus = 'STALE';
         // Show stale hint on section
@@ -487,21 +858,15 @@
         textarea.value = document.getElementById('compare-after').value;
         autoResize(textarea);
         closeCompare();
-        await saveEditor();
+        await saveEditor(true);
+        // Snapshot AI text for this section
+        const sectionName = textarea.dataset.sectionName;
+        await _snapshotAiTextSection(currentDocId, sectionName);
 
-        // Mark step 1 done and enable step 2
-        if (task === 'fill') {
-            const doneEl = document.getElementById(`step1-done-${idx}`);
-            if (doneEl) doneEl.style.display = 'inline';
-            const refineBtn = document.getElementById(`btn-refine-${idx}`);
-            if (refineBtn) {
-                refineBtn.disabled = false;
-                refineBtn.style.opacity = '1';
-            }
-        }
+        // Mark step done
+        _markSectionBtnDone(idx, task);
 
         // Run Gate re-check + update UI
-        const sectionName = textarea.dataset.sectionName;
         await runGateAndUpdateUI(idx, sectionName);
 
         // Remove stale hint if exists
@@ -528,12 +893,14 @@
         if (!textarea) return;
         const sectionName = textarea.dataset.sectionName;
         const btn = document.getElementById(`btn-gate-${idx}`);
-        if (btn) { btn.disabled = true; btn.textContent = '🛡️ 검증 중...'; }
-        await saveEditor();
+        const card = document.getElementById(`section-card-${idx}`);
+        if (btn) { btn.disabled = true; btn.textContent = '③ 검증 중...'; }
+        _markSectionWorking(idx, '③ 검증 중…');
+        await saveEditor(true);
         await runGateAndUpdateUI(idx, sectionName);
-        if (btn) { btn.disabled = false; btn.textContent = '🛡️ Gate 검증'; }
+        if (btn) { btn.disabled = false; btn.textContent = '③ Gate 검증 ✓'; btn.style.outline = '2px solid #22c55e'; btn.style.outlineOffset = '-2px'; }
+        _markSectionPhase(idx, 3);
         // Remove stale hint if exists
-        const card = textarea.closest('.card');
         if (card) {
             const staleHint = card.querySelector('.gate-stale-hint');
             if (staleHint) staleHint.remove();
@@ -550,6 +917,17 @@
             const textarea = document.getElementById(`editor-${idx}`);
             if (textarea && gate.reasons) {
                 textarea.dataset.gateReasons = JSON.stringify(gate.reasons);
+            }
+            // Re-render gate reasons box with new results
+            const reasonsJson = gate.reasons ? JSON.stringify(gate.reasons) : '[]';
+            const box = document.getElementById(`gate-reasons-${idx}`);
+            const newHTML = renderGateReasonsHTML(gate.status, reasonsJson, idx, gate.time_s);
+            if (box) {
+                if (newHTML) { box.outerHTML = newHTML; }
+                else { box.remove(); }
+            } else if (newHTML) {
+                const card = document.getElementById(`section-card-${idx}`);
+                if (card) card.insertAdjacentHTML('afterbegin', newHTML);
             }
         } catch(e) {
             console.error('[GATE_RECHECK]', e);
@@ -587,6 +965,152 @@
             if (hlDiv) hlDiv.style.display = 'none';
             if (textarea) textarea.style.display = '';
         }
+
+        // RAG 반영 버튼: 모든 섹션 PASS일 때 활성화
+        const allTAs = document.getElementById('editor-container').querySelectorAll('textarea.editor-textarea');
+        const allPass = Array.from(allTAs).every(ta => ta.dataset.gateStatus === 'PASS');
+        if (allPass) _enableBtn('btn-publish-all', '📦 RAG 반영');
+        else _disableBtn('btn-publish-all', '📦 RAG 반영');
+    }
+
+    async function dismissGateReason(idx, reasonIndex) {
+        const textarea = document.getElementById(`editor-${idx}`);
+        if (!textarea) return;
+        const sectionName = textarea.dataset.sectionName;
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/section/${encodeURIComponent(sectionName)}/gate-dismiss`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason_index: reasonIndex })
+            });
+            if (!res.ok) { alert('무시 처리 실패'); return; }
+            const data = await res.json();
+            // Update gate status + reasons in dataset
+            textarea.dataset.gateStatus = data.status;
+            textarea.dataset.gateReasons = JSON.stringify(data.reasons);
+            // Re-render reasons box
+            const box = document.getElementById(`gate-reasons-${idx}`);
+            const newHTML = renderGateReasonsHTML(data.status, JSON.stringify(data.reasons), idx);
+            if (box) {
+                if (newHTML) { box.outerHTML = newHTML; }
+                else { box.remove(); }
+            } else if (newHTML) {
+                // box가 없는 경우 (PASS에서 무시 해제 시) 카드 맨 위에 삽입
+                const card = document.getElementById(`section-card-${idx}`);
+                if (card) card.insertAdjacentHTML('afterbegin', newHTML);
+            }
+            // Update badge
+            const card = document.getElementById(`section-card-${idx}`);
+            if (card) {
+                const strong = card.querySelector('div > div > strong');
+                if (strong) {
+                    const oldBadge = strong.querySelector('span[style*="border-radius"]');
+                    if (oldBadge) oldBadge.remove();
+                    strong.insertAdjacentHTML('beforeend', _gateBadgeHTML(data.status));
+                }
+            }
+            updateSectionGateUI(idx, data.status);
+            refreshHighlightIfActive(idx);
+            // RAG 반영 버튼 상태 갱신
+            const allTAs = document.getElementById('editor-container').querySelectorAll('textarea.editor-textarea');
+            const allPass = Array.from(allTAs).every(ta => ta.dataset.gateStatus === 'PASS');
+            if (allPass) _enableBtn('btn-publish-all', '📦 RAG 반영');
+            else _disableBtn('btn-publish-all', '📦 RAG 반영');
+        } catch(e) {
+            console.error('[DISMISS_GATE]', e);
+            alert('무시 처리 오류: ' + e.message);
+        }
+    }
+
+    function dismissGateReasonFromPopover(idx, ri) {
+        hideGatePopover();
+        dismissGateReason(idx, ri);
+    }
+
+    function applyGateSuggestionFromPopover(idx, ri) {
+        hideGatePopover();
+        // 하이라이트 모드 해제 → textarea 표시 후 TODO 삽입
+        const hlDiv = document.getElementById(`highlight-${idx}`);
+        if (hlDiv && hlDiv.style.display !== 'none') {
+            toggleHighlight(idx);
+        }
+        applyGateSuggestion(idx, ri);
+    }
+
+    function refreshHighlightIfActive(idx) {
+        const hlDiv = document.getElementById(`highlight-${idx}`);
+        const textarea = document.getElementById(`editor-${idx}`);
+        if (!hlDiv || !textarea) return;
+        if (hlDiv.style.display === 'none') return;
+        // Re-render highlight
+        let reasons = [];
+        try {
+            let raw = textarea.dataset.gateReasons || '[]';
+            reasons = JSON.parse(raw);
+            if (typeof reasons === 'string') reasons = JSON.parse(reasons);
+        } catch(e) {}
+        const result = renderHighlightedText(textarea.value, reasons, textarea.dataset.gateStatus, idx);
+        hlDiv.innerHTML = result.html;
+        renderUnmatchedIssues(idx, reasons, result.unmatchedReasonIndices);
+    }
+
+    function renderUnmatchedIssues(idx, reasons, unmatchedIndices) {
+        const container = document.getElementById(`gate-unmatched-${idx}`);
+        if (!container) return;
+        if (!unmatchedIndices || !unmatchedIndices.length) {
+            container.innerHTML = '';
+            return;
+        }
+        let html = '<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,0,0,0.1);font-size:12px;">';
+        html += '<div style="font-weight:600;margin-bottom:4px;">📌 텍스트 매칭 불가 이슈:</div>';
+        for (const ri of unmatchedIndices) {
+            const r = reasons[ri];
+            if (!r || r.dismissed) continue;
+            const sevColor = r.severity === 'HIGH' ? '#dc2626' : '#d97706';
+            const suggestionHTML = r.fix_suggestion
+                ? `<span style="color:#2563eb;margin-left:4px;">💡 ${_escHtml(r.fix_suggestion)}</span>`
+                : '';
+            html += `<div style="padding:3px 0;display:flex;align-items:flex-start;gap:6px;">
+                <span style="flex:1;"><span style="color:${sevColor};font-weight:600;">[${_escHtml(r.type || 'ISSUE')}]</span> ${_escHtml(r.message || '')}${suggestionHTML}</span>
+                <button onclick="dismissGateReasonFromPopover(${idx},${ri})" style="flex-shrink:0;padding:2px 8px;border:1px solid #d1d5db;border-radius:4px;background:#fff;color:#374151;cursor:pointer;font-size:11px;">무시</button>
+            </div>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    function toggleEvidence(idx) {
+        const panel = document.getElementById(`evidence-panel-${idx}`);
+        if (!panel) return;
+        if (panel.style.display !== 'none') {
+            panel.style.display = 'none';
+            return;
+        }
+        let spans = [];
+        try {
+            const raw = panel.dataset.evidence || '[]';
+            spans = JSON.parse(raw);
+            if (typeof spans === 'string') spans = JSON.parse(spans);
+        } catch(e) { console.error('[EVIDENCE] parse error', e); }
+
+        if (!spans.length) {
+            panel.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:13px;">Evidence 없음</div>';
+        } else {
+            let html = '<div style="font-size:13px;">';
+            for (const s of spans) {
+                let icon = '✅';
+                let color = '#166534';
+                if (s.is_pii) { icon = '🔒'; color = '#d97706'; }
+                else if (s.char_start === -1) { icon = '❌'; color = '#dc2626'; }
+                html += `<div style="padding:4px 0;border-bottom:1px solid #f3f4f6;color:${color};">
+                    ${icon} <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px;font-size:12px;">${_escHtml(s.span_text || '')}</code>
+                    <span style="color:#6b7280;font-size:12px;margin-left:6px;">→ ${_escHtml(s.maps_to || '')}</span>
+                </div>`;
+            }
+            html += '</div>';
+            panel.innerHTML = html;
+        }
+        panel.style.display = 'block';
     }
 
     function toggleHighlight(idx) {
@@ -594,66 +1118,146 @@
         const hlDiv = document.getElementById(`highlight-${idx}`);
         if (!textarea || !hlDiv) return;
 
+        const legendId = `highlight-legend-${idx}`;
+        let legendEl = document.getElementById(legendId);
+
         if (hlDiv.style.display === 'none') {
             // Show highlighted view
             let reasons = [];
-            try { reasons = JSON.parse(textarea.dataset.gateReasons || '[]'); } catch(e) {}
-            hlDiv.innerHTML = renderHighlightedText(textarea.value, reasons, textarea.dataset.gateStatus);
+            try {
+                let raw = textarea.dataset.gateReasons || '[]';
+                reasons = JSON.parse(raw);
+                if (typeof reasons === 'string') reasons = JSON.parse(reasons);
+            } catch(e) { console.error('[HIGHLIGHT] reasons parse error', e); }
+            const result = renderHighlightedText(textarea.value, reasons, textarea.dataset.gateStatus, idx);
+            hlDiv.innerHTML = result.html;
+            renderUnmatchedIssues(idx, reasons, result.unmatchedReasonIndices);
             hlDiv.style.display = 'block';
             textarea.style.display = 'none';
+            // Show legend outside panel
+            if (!legendEl) {
+                const legendHTML = `<div id="${legendId}" style="font-size:11px;color:#6b7280;margin-bottom:4px;display:flex;gap:12px;">
+                    <span><mark style="background:#fef08a;padding:1px 4px;border-radius:2px;">노랑</mark> NEED_FIX</span>
+                    <span><mark style="background:#fecaca;padding:1px 4px;border-radius:2px;">빨강</mark> BLOCK</span>
+                    <span style="color:#9ca3af;">클릭하면 상세 내용</span>
+                </div>`;
+                hlDiv.insertAdjacentHTML('beforebegin', legendHTML);
+            } else {
+                legendEl.style.display = 'flex';
+            }
         } else {
             // Back to edit mode
             hlDiv.style.display = 'none';
             textarea.style.display = '';
+            if (legendEl) legendEl.style.display = 'none';
+            // 높이 복원
+            textarea.style.height = 'auto';
+            textarea.style.height = textarea.scrollHeight + 'px';
         }
     }
 
-    function renderHighlightedText(text, reasons, gateStatus) {
+    function renderHighlightedText(text, reasons, gateStatus, sectionIdx) {
         if (!reasons || !reasons.length) {
-            return `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">${_escHtml(text)}</pre>`;
+            return { html: `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">${_escHtml(text)}</pre>`, unmatchedReasonIndices: [] };
         }
 
-        // Collect location_hints with their severity
+        // Collect location_hints with their severity (skip dismissed)
         const hints = [];
-        for (const r of reasons) {
+        const noHintIndices = []; // reasons without location_hint
+        for (let ri = 0; ri < reasons.length; ri++) {
+            const r = reasons[ri];
+            if (r.dismissed) continue;
             if (r.location_hint && r.location_hint.trim()) {
                 hints.push({
                     hint: r.location_hint.trim(),
                     severity: r.severity || 'MEDIUM',
                     type: r.type || '',
                     message: r.message || '',
-                    suggestion: r.fix_suggestion || ''
+                    suggestion: r.fix_suggestion || '',
+                    reasonIdx: ri
                 });
+            } else {
+                noHintIndices.push(ri);
             }
         }
 
-        let html = _escHtml(text);
+        // Find matches in RAW text (no escaping), collect [start, end, hintObj]
+        const matches = [];
+        const textLower = text.toLowerCase();
+        const lines = text.split('\n');
+        // precompute line offsets
+        const lineOffsets = [];
+        let off = 0;
+        for (const ln of lines) { lineOffsets.push(off); off += ln.length + 1; }
 
-        // Highlight each location_hint in the text
         for (const h of hints) {
-            const escaped = _escHtml(h.hint);
-            // Try exact match first, then case-insensitive partial
-            const idx = html.indexOf(escaped);
-            if (idx >= 0) {
-                const color = h.severity === 'HIGH' ? '#fecaca' : '#fef08a';
-                const borderColor = h.severity === 'HIGH' ? '#f87171' : '#facc15';
-                const tooltip = `[${h.type}] ${h.message}${h.suggestion ? ' → ' + h.suggestion : ''}`;
-                html = html.substring(0, idx)
-                    + `<mark style="background:${color};border-bottom:2px solid ${borderColor};padding:1px 2px;border-radius:2px;cursor:help;" title="${_escAttr(tooltip)}">`
-                    + html.substring(idx, idx + escaped.length)
-                    + '</mark>'
-                    + html.substring(idx + escaped.length);
+            const raw = h.hint;
+            let pos = text.indexOf(raw);
+            // Fallback 1: strip markdown markers and retry
+            if (pos < 0) {
+                const stripped = raw.replace(/^[#>*\-\s]+/, '').trim();
+                if (stripped.length > 5) pos = text.indexOf(stripped);
+            }
+            // Fallback 2: case-insensitive
+            if (pos < 0) {
+                pos = textLower.indexOf(raw.toLowerCase());
+            }
+            // Fallback 3: first 15 chars partial → extend to end of line
+            if (pos < 0 && raw.length > 15) {
+                const partial = raw.substring(0, 15).toLowerCase();
+                pos = textLower.indexOf(partial);
+                if (pos >= 0) {
+                    const lineEnd = text.indexOf('\n', pos);
+                    matches.push({ start: pos, end: lineEnd > pos ? lineEnd : pos + raw.length, h });
+                    continue;
+                }
+            }
+            // Fallback 4: keyword-based line match — extract 2+ char words, find line with most matches
+            if (pos < 0) {
+                const keywords = raw.replace(/[^\w가-힣]/g, ' ').split(/\s+/).filter(w => w.length >= 2);
+                if (keywords.length >= 2) {
+                    let bestLine = -1, bestScore = 0;
+                    for (let li = 0; li < lines.length; li++) {
+                        const lineLower = lines[li].toLowerCase();
+                        const score = keywords.filter(k => lineLower.includes(k.toLowerCase())).length;
+                        if (score > bestScore) { bestScore = score; bestLine = li; }
+                    }
+                    if (bestLine >= 0 && bestScore >= 1) {
+                        matches.push({ start: lineOffsets[bestLine], end: lineOffsets[bestLine] + lines[bestLine].length, h });
+                        continue;
+                    }
+                }
+            }
+            if (pos >= 0) {
+                matches.push({ start: pos, end: pos + raw.length, h });
+            } else {
+                matches.push({ start: -1, end: -1, h });
             }
         }
 
-        // Add legend
-        const legend = `<div style="font-size:11px;color:#6b7280;margin-bottom:8px;display:flex;gap:12px;">
-            <span><mark style="background:#fef08a;padding:1px 4px;border-radius:2px;">노랑</mark> NEED_FIX (LOW/MEDIUM)</span>
-            <span><mark style="background:#fecaca;padding:1px 4px;border-radius:2px;">빨강</mark> BLOCK (HIGH)</span>
-            <span style="color:#9ca3af;">마우스 올리면 상세 내용 표시</span>
-        </div>`;
+        // Sort matched ranges by position, skip unmatched
+        const matched = matches.filter(m => m.start >= 0).sort((a, b) => a.start - b.start);
+        const unmatched = matches.filter(m => m.start < 0);
 
-        return legend + `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;line-height:1.8;">${html}</pre>`;
+        // Build HTML from raw text with <mark> insertions
+        let html = '';
+        let cursor = 0;
+        for (const m of matched) {
+            if (m.start < cursor) continue; // overlapping, skip
+            html += _escHtml(text.substring(cursor, m.start));
+            const color = m.h.severity === 'HIGH' ? '#fecaca' : '#fef08a';
+            const borderColor = m.h.severity === 'HIGH' ? '#f87171' : '#facc15';
+            html += `<mark class="gate-mark" data-section-idx="${sectionIdx}" data-reason-idx="${m.h.reasonIdx}" style="background:${color};border-bottom:2px solid ${borderColor};padding:1px 2px;border-radius:2px;cursor:pointer;">`;
+            html += _escHtml(text.substring(m.start, m.end));
+            html += '</mark>';
+            cursor = m.end;
+        }
+        html += _escHtml(text.substring(cursor));
+
+        // Collect unmatched reason indices (failed matches + reasons without location_hint)
+        const unmatchedReasonIndices = [...unmatched.map(m => m.h.reasonIdx), ...noHintIndices];
+
+        return { html: `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;line-height:1.8;">${html}</pre>`, unmatchedReasonIndices };
     }
 
     function _escHtml(s) {
@@ -663,96 +1267,497 @@
         return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    async function bulkFillNeedFix() {
-        const container = document.getElementById('editor-container');
-        const textareas = container.querySelectorAll('textarea.editor-textarea');
-        const targets = [];
-        textareas.forEach((ta, idx) => {
-            if (ta.dataset.gateStatus === 'NEED_FIX') {
-                targets.push({ idx, name: ta.dataset.sectionName, ta });
-            }
-        });
+    // ── Gate Popover ──
+    let _gatePopoverEl = null;
 
-        if (!targets.length) {
-            alert('NEED_FIX 섹션이 없습니다.');
-            return;
+    function _ensurePopoverEl() {
+        if (_gatePopoverEl) return _gatePopoverEl;
+        const div = document.createElement('div');
+        div.className = 'gate-popover';
+        div.innerHTML = `<div class="gate-popover-arrow arrow-top" style="left:20px;"></div>
+            <div class="gate-popover-body"></div>`;
+        document.body.appendChild(div);
+        _gatePopoverEl = div;
+        return div;
+    }
+
+    function showGatePopover(markEl) {
+        const sIdx = parseInt(markEl.dataset.sectionIdx);
+        const rIdx = parseInt(markEl.dataset.reasonIdx);
+        const textarea = document.getElementById(`editor-${sIdx}`);
+        if (!textarea) return;
+        let reasons = [];
+        try {
+            let raw = textarea.dataset.gateReasons || '[]';
+            reasons = JSON.parse(raw);
+            if (typeof reasons === 'string') reasons = JSON.parse(reasons);
+        } catch(e) { return; }
+        const r = reasons[rIdx];
+        if (!r) return;
+
+        const pop = _ensurePopoverEl();
+        const body = pop.querySelector('.gate-popover-body');
+        const sevColor = r.severity === 'HIGH' ? '#dc2626' : '#d97706';
+        const sevBg = r.severity === 'HIGH' ? '#fef2f2' : '#fffbeb';
+        const typeLabel = r.type || 'ISSUE';
+        const sevLabel = r.severity || 'MEDIUM';
+        const suggestionHTML = r.fix_suggestion
+            ? `<div style="font-size:12px;color:#2563eb;margin:6px 0;padding:4px 8px;background:#eff6ff;border-radius:4px;">💡 ${_escHtml(r.fix_suggestion)}</div>`
+            : '';
+        const applyBtn = r.fix_suggestion
+            ? `<button onclick="applyGateSuggestionFromPopover(${sIdx},${rIdx})" style="padding:4px 12px;border:none;border-radius:4px;background:#2563eb;color:white;cursor:pointer;font-size:12px;">제안 적용</button>`
+            : '';
+
+        body.innerHTML = `
+            <div style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;background:${sevBg};color:${sevColor};margin-bottom:6px;">${_escHtml(typeLabel)} · ${sevLabel}</div>
+            <div style="font-size:13px;margin:4px 0;">${_escHtml(r.message || '')}</div>
+            ${suggestionHTML}
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:8px 0;">
+            <div style="display:flex;justify-content:flex-end;gap:6px;">
+                ${applyBtn}
+                <button onclick="dismissGateReasonFromPopover(${sIdx},${rIdx})" style="padding:4px 12px;border:1px solid #d1d5db;border-radius:4px;background:#fff;color:#374151;cursor:pointer;font-size:12px;">무시</button>
+            </div>`;
+
+        pop.style.display = 'block';
+        positionPopover(pop, markEl);
+    }
+
+    function hideGatePopover() {
+        if (_gatePopoverEl) _gatePopoverEl.style.display = 'none';
+    }
+
+    function positionPopover(popover, markEl) {
+        const markRect = markEl.getBoundingClientRect();
+        const popRect = popover.getBoundingClientRect();
+        const arrow = popover.querySelector('.gate-popover-arrow');
+        const scrollY = window.scrollY || document.documentElement.scrollTop;
+        const scrollX = window.scrollX || document.documentElement.scrollLeft;
+
+        // Prefer below
+        let top = markRect.bottom + scrollY + 8;
+        let left = markRect.left + scrollX;
+        let arrowOnTop = true;
+
+        // If not enough space below, show above
+        if (markRect.bottom + popRect.height + 16 > window.innerHeight) {
+            top = markRect.top + scrollY - popRect.height - 8;
+            arrowOnTop = false;
         }
 
-        const bulkBtn = document.getElementById('btn-bulk-fill');
-        if (bulkBtn) { bulkBtn.disabled = true; bulkBtn.textContent = '🔧 일괄 보강 중...'; }
+        // Clamp horizontal
+        if (left + popRect.width > window.innerWidth + scrollX - 8) {
+            left = window.innerWidth + scrollX - popRect.width - 8;
+        }
+        if (left < scrollX + 8) left = scrollX + 8;
 
-        for (const t of targets) {
-            // Re-check status (may have changed)
-            if (t.ta.dataset.gateStatus !== 'NEED_FIX') continue;
+        popover.style.top = top + 'px';
+        popover.style.left = left + 'px';
 
-            // 1) Call Fill API
-            const body = { text: t.ta.value, task: 'fill', context: t.name, allow_qa: 'false' };
-            try {
+        // Arrow position
+        arrow.className = 'gate-popover-arrow ' + (arrowOnTop ? 'arrow-top' : 'arrow-bottom');
+        const arrowLeft = Math.max(12, Math.min(markRect.left + scrollX - left + markRect.width / 2 - 5, popRect.width - 20));
+        arrow.style.left = arrowLeft + 'px';
+    }
+
+    // Global listeners for popover
+    document.addEventListener('click', function(e) {
+        const mark = e.target.closest('.gate-mark');
+        if (mark) {
+            e.preventDefault();
+            e.stopPropagation();
+            showGatePopover(mark);
+            return;
+        }
+        if (_gatePopoverEl && !e.target.closest('.gate-popover')) {
+            hideGatePopover();
+        }
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') hideGatePopover();
+    });
+
+    // Close popover on editor-body scroll (use capture to catch scroll in nested elements)
+    document.addEventListener('scroll', function(e) {
+        if (e.target.closest && (e.target.closest('.editor-body') || e.target.closest('.highlight-preview'))) {
+            hideGatePopover();
+        }
+    }, true);
+
+    function toggleMoreBtns(idx) {
+        const el = document.getElementById(`more-btns-${idx}`);
+        if (!el) return;
+        el.style.display = el.style.display === 'none' ? 'inline-flex' : 'none';
+    }
+
+    function _startLamp(label) {
+        const lamp = document.getElementById('manualize-status');
+        const timerEl = document.getElementById('manualize-timer');
+        if (lamp) { lamp.style.display = 'inline'; lamp.style.cssText = ''; lamp.textContent = label; }
+        const start = Date.now();
+        let iv = null;
+        if (timerEl) {
+            timerEl.style.display = 'inline';
+            iv = setInterval(() => {
+                const s = (Date.now() - start) / 1000;
+                const m = Math.floor(s / 60);
+                const sec = (s % 60).toFixed(1);
+                timerEl.textContent = m > 0 ? `${m}:${sec.padStart(4,'0')}` : `${sec}s`;
+            }, 100);
+        }
+        return { lamp, timerEl, start, iv };
+    }
+    function _stopLamp(ctx, resultText, isError) {
+        if (ctx.iv) clearInterval(ctx.iv);
+        const _raw = (Date.now() - ctx.start) / 1000;
+        const _m = Math.floor(_raw / 60);
+        const _s = (_raw % 60).toFixed(1);
+        const elapsed = _m > 0 ? `${_m}분 ${_s}초` : `${_s}초`;
+        if (ctx.timerEl) ctx.timerEl.style.display = 'none';
+        if (ctx.lamp) {
+            ctx.lamp.className = '';
+            ctx.lamp.textContent = `${resultText} · ${elapsed}`;
+            ctx.lamp.style.cssText = isError
+                ? 'display:inline;background:#fecaca;color:#991b1b;padding:2px 10px;border-radius:8px;font-size:12px;font-weight:700;'
+                : 'display:inline;background:#dcfce7;color:#166534;padding:2px 10px;border-radius:8px;font-size:12px;font-weight:700;';
+            if (!isError) setTimeout(() => { ctx.lamp.style.display = 'none'; ctx.lamp.style.cssText = ''; ctx.lamp.className = 'manualize-lamp'; }, 8000);
+        }
+    }
+
+    function _getSections() {
+        const tas = document.getElementById('editor-container').querySelectorAll('textarea.editor-textarea');
+        const list = [];
+        let totalChars = 0;
+        tas.forEach((ta, idx) => {
+            list.push({ idx, name: ta.dataset.sectionName, text: ta.value, ta });
+            totalChars += ta.value.length;
+        });
+        return { list, totalChars };
+    }
+
+    async function _runParallel(items, concurrency, fn, onProgress) {
+        let done = 0, failed = 0;
+        const results = new Array(items.length);
+        let idx = 0;
+        async function worker() {
+            while (idx < items.length) {
+                const i = idx++;
+                try {
+                    results[i] = await fn(items[i]);
+                } catch(e) { results[i] = { error: e }; failed++; }
+                done++;
+                if (onProgress) onProgress(done, failed);
+            }
+        }
+        await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+        return { results, done, failed };
+    }
+
+    function _enableBtn(id, label) {
+        const b = document.getElementById(id);
+        if (b) { b.disabled = false; b.style.opacity = '1'; b.style.cursor = 'pointer'; if (label) b.textContent = label; }
+    }
+    function _disableBtn(id, label) {
+        const b = document.getElementById(id);
+        if (b) { b.disabled = true; b.style.opacity = '0.4'; b.style.cursor = 'not-allowed'; if (label) b.textContent = label; }
+    }
+
+    function _markAllPhase(phase, count) {
+        for (let i = 0; i < count; i++) _markSectionPhase(i, phase);
+    }
+
+    function _markSectionPhase(idx, phase) {
+        const badge = document.getElementById(`phase-done-${idx}`);
+        if (!badge) return;
+        badge.style.display = 'inline';
+        badge.classList.remove('badge-working');
+        if (phase === 1) { badge.textContent = '① 완료'; badge.style.background = '#dcfce7'; badge.style.color = '#166534'; }
+        else if (phase === 2) { badge.textContent = '② 완료'; badge.style.background = '#ede9fe'; badge.style.color = '#5b21b6'; }
+        else if (phase === 3) { badge.textContent = '③ 완료'; badge.style.background = '#fef9c3'; badge.style.color = '#854d0e'; }
+        // 카드 밝게 복원
+        const card = document.getElementById(`section-card-${idx}`);
+        if (card) { card.style.opacity = '1'; }
+    }
+
+    function _markSectionWorking(idx, label) {
+        const badge = document.getElementById(`phase-done-${idx}`);
+        if (!badge) return;
+        badge.style.display = 'inline';
+        badge.textContent = label;
+        badge.style.background = '#fef3c7';
+        badge.style.color = '#92400e';
+        badge.classList.add('badge-working');
+        // 카드 밝게 (진행 중)
+        const card = document.getElementById(`section-card-${idx}`);
+        if (card) { card.style.opacity = '1'; }
+    }
+
+    function _dimAllSections(count) {
+        for (let i = 0; i < count; i++) {
+            const card = document.getElementById(`section-card-${i}`);
+            if (card) { card.style.opacity = '0.45'; card.style.boxShadow = ''; }
+        }
+    }
+
+    function _markSectionBtnDone(idx, task) {
+        if (task === 'fill') {
+            const btn = document.getElementById(`btn-fill-${idx}`);
+            if (btn) { btn.textContent = '① 맥락 보강 ✓'; btn.style.outline = '2px solid #22c55e'; btn.style.outlineOffset = '-2px'; }
+        }
+        if (task === 'refine') {
+            const btn = document.getElementById(`btn-refine-${idx}`);
+            if (btn) { btn.textContent = '② RAG 최적화 ✓'; btn.style.outline = '2px solid #22c55e'; btn.style.outlineOffset = '-2px'; }
+        }
+    }
+
+    function _restorePhases(phasesStr, sectionCount) {
+        if (!phasesStr) return;
+        const phases = phasesStr.split(',');
+        let maxPhase = 0;
+        if (phases.includes('fill')) {
+            maxPhase = 1;
+            _markBtnDone('btn-fill-all', '① 맥락 보강(전체) ✓');
+            for (let i = 0; i < sectionCount; i++) _markSectionBtnDone(i, 'fill');
+        }
+        if (phases.includes('refine')) {
+            maxPhase = 2;
+            _markBtnDone('btn-refine-all', '② RAG 최적화(전체) ✓');
+            for (let i = 0; i < sectionCount; i++) _markSectionBtnDone(i, 'refine');
+        }
+        if (phases.includes('gate')) {
+            _markBtnDone('btn-gate-all', '③ Gate(전체) ✓');
+            for (let i = 0; i < sectionCount; i++) {
+                const gateBtn = document.getElementById(`btn-gate-${i}`);
+                if (gateBtn) { gateBtn.textContent = '③ Gate 검증 ✓'; gateBtn.style.outline = '2px solid #22c55e'; gateBtn.style.outlineOffset = '-2px'; }
+            }
+        }
+        if (maxPhase > 0) _markAllPhase(maxPhase, sectionCount);
+    }
+
+    function _markBtnDone(id, label) {
+        const b = document.getElementById(id);
+        if (!b) return;
+        b.disabled = false;
+        b.style.opacity = '1';
+        b.style.cursor = 'pointer';
+        b.textContent = label;
+        b.style.outline = '2px solid #22c55e';
+        b.style.outlineOffset = '-2px';
+    }
+
+    async function _savePhase(docId, phase) {
+        try {
+            await fetch(`/api/doc/${docId}/completed-phase`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phase })
+            });
+        } catch(e) { console.warn('[SAVE_PHASE]', e); }
+    }
+
+    async function _snapshotAiText(docId) {
+        try {
+            await fetch(`/api/doc/${docId}/snapshot-ai-text`, { method: 'POST' });
+        } catch(e) { console.warn('[SNAPSHOT_AI]', e); }
+    }
+
+    async function _snapshotAiTextSection(docId, sectionName) {
+        try {
+            await fetch(`/api/doc/${docId}/snapshot-ai-text-section`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section_name: sectionName })
+            });
+        } catch(e) { console.warn('[SNAPSHOT_AI_SEC]', e); }
+    }
+
+    async function fillAll() {
+        if (!confirm('모든 섹션에 맥락 보강(①)을 실행합니다. 진행하시겠습니까?')) return;
+        _disableBtn('btn-fill-all', '① 보강 중...');
+
+        const { list, totalChars } = _getSections();
+        const total = list.length;
+        const charsLabel = totalChars > 0 ? `${totalChars.toLocaleString()}자` : '';
+        const ctx = _startLamp(`① 맥락 보강 중... ${charsLabel} · 0/${total}`);
+        _dimAllSections(total);
+
+        try {
+            await saveEditor(true);
+            const { done, failed } = await _runParallel(list, 3, async (sec) => {
+                _markSectionWorking(sec.idx, '① 진행 중…');
                 const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
+                    body: JSON.stringify({ text: sec.text, task: 'fill', context: sec.name, allow_qa: 'false' })
                 });
-                if (!res.ok) continue;
-                const result = await res.json();
-
-                // 2) Open compare modal and wait for user decision
-                const decision = await openBulkCompare(t.idx, t.name, t.ta.value, result.suggestion);
-
-                if (decision === 'skip') continue;
-
-                // 3) Apply + save
-                t.ta.value = document.getElementById('compare-after').value;
-                autoResize(t.ta);
-                closeCompare();
-                await saveEditor();
-
-                // 4) Gate re-check
-                await runGateAndUpdateUI(t.idx, t.name);
-
-                // 5) Mark step done
-                const doneEl = document.getElementById(`step1-done-${t.idx}`);
-                if (doneEl) doneEl.style.display = 'inline';
-                const refineBtn = document.getElementById(`btn-refine-${t.idx}`);
-                if (refineBtn) { refineBtn.disabled = false; refineBtn.style.opacity = '1'; }
-
-            } catch(e) {
-                console.error(`[BULK_FILL] Error for ${t.name}:`, e);
-            }
-        }
-
-        if (bulkBtn) { bulkBtn.disabled = false; bulkBtn.textContent = '🔧 NEED_FIX 일괄 보강'; }
-    }
-
-    function openBulkCompare(idx, sectionName, before, after) {
-        return new Promise((resolve) => {
-            compareTargetIdx = idx;
-            compareTargetTask = 'fill';
-            document.getElementById('compare-title').textContent = `🔧 일괄 보강 — ${sectionName}`;
-            document.getElementById('compare-before').textContent = before;
-            const afterTA = document.getElementById('compare-after');
-            afterTA.value = after;
-            document.getElementById('compare-modal').style.display = 'flex';
-            requestAnimationFrame(() => {
-                afterTA.style.height = 'auto';
-                afterTA.style.height = afterTA.scrollHeight + 'px';
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.suggestion) { sec.ta.value = data.suggestion; autoResize(sec.ta); sec._aiModified = true; }
+                    _markSectionPhase(sec.idx, 1);
+                } else { throw new Error(`HTTP ${res.status}`); }
+            }, (d, f) => {
+                if (ctx.lamp) ctx.lamp.textContent = `① 맥락 보강 중... ${charsLabel} · ${d}/${total}`;
             });
-
-            // Override buttons for bulk mode
-            window._bulkResolve = resolve;
-            const modal = document.getElementById('compare-modal');
-            // Find buttons in footer
-            const footer = modal.querySelector('div[style*="justify-content: flex-end"]');
-            if (footer) {
-                footer.innerHTML = `
-                    <button class="btn" style="background:#9ca3af;" onclick="window._bulkResolve('skip'); closeCompare();">⏭️ 건너뛰기</button>
-                    <button class="btn" style="background:#3b82f6;" onclick="window._bulkResolve('apply');">✅ 적용 + Gate 재검증</button>
-                `;
+            await saveEditor(true);
+            // AI가 수정한 섹션만 개별 snapshot
+            for (const sec of list) {
+                if (sec._aiModified) await _snapshotAiTextSection(currentDocId, sec.name);
             }
-        });
+            await _savePhase(currentDocId, 'fill');
+            _markBtnDone('btn-fill-all', '① 맥락 보강(전체) ✓');
+            _stopLamp(ctx, `맥락 보강 완료 · ${done - failed}/${total}개 · ${charsLabel}`, false);
+            // Refresh editor to show updated text
+            await openEditor(currentDocId);
+        } catch(e) {
+            console.error('[FILL_ALL]', e);
+            _stopLamp(ctx, '맥락 보강 실패', true);
+            alert('맥락 보강 오류: ' + e.message);
+            _enableBtn('btn-fill-all', '① 맥락 보강(전체)');
+        }
     }
 
-    async function saveEditor() {
+    async function refineAll() {
+        if (!confirm('모든 섹션에 RAG 최적화(②)를 실행합니다. 진행하시겠습니까?')) return;
+        _disableBtn('btn-refine-all', '② 최적화 중...');
+
+        const { list, totalChars } = _getSections();
+        const total = list.length;
+        const charsLabel = totalChars > 0 ? `${totalChars.toLocaleString()}자` : '';
+        const ctx = _startLamp(`② RAG 최적화 중... ${charsLabel} · 0/${total}`);
+        _dimAllSections(total);
+
+        try {
+            await saveEditor(true);
+            const { done, failed } = await _runParallel(list, 3, async (sec) => {
+                _markSectionWorking(sec.idx, '② 진행 중…');
+                const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: sec.text, task: 'refine', context: sec.name })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.suggestion) { sec.ta.value = data.suggestion; autoResize(sec.ta); sec._aiModified = true; }
+                    _markSectionPhase(sec.idx, 2);
+                } else { throw new Error(`HTTP ${res.status}`); }
+            }, (d, f) => {
+                if (ctx.lamp) ctx.lamp.textContent = `② RAG 최적화 중... ${charsLabel} · ${d}/${total}`;
+            });
+            await saveEditor(true);
+            // AI가 수정한 섹션만 개별 snapshot
+            for (const sec of list) {
+                if (sec._aiModified) await _snapshotAiTextSection(currentDocId, sec.name);
+            }
+            await _savePhase(currentDocId, 'refine');
+            _markBtnDone('btn-refine-all', '② RAG 최적화(전체) ✓');
+            _stopLamp(ctx, `RAG 최적화 완료 · ${done - failed}/${total}개 · ${charsLabel}`, false);
+            // Refresh editor to show updated text
+            await openEditor(currentDocId);
+        } catch(e) {
+            console.error('[REFINE_ALL]', e);
+            _stopLamp(ctx, 'RAG 최적화 실패', true);
+            alert('RAG 최적화 오류: ' + e.message);
+            _enableBtn('btn-refine-all', '② RAG 최적화(전체)');
+        }
+    }
+
+    async function gateAll() {
+        if (!confirm('모든 섹션에 Gate 검증(③)을 실행합니다. 진행하시겠습니까?')) return;
+        _disableBtn('btn-gate-all', '③ 검증 중...');
+
+        const { list, totalChars } = _getSections();
+        const charsLabel = totalChars > 0 ? `${totalChars.toLocaleString()}자` : '';
+        const ctx = _startLamp(`③ Gate 검증 중... ${charsLabel} · 0/${list.length}`);
+        _dimAllSections(list.length);
+        let pass_count = 0, need_fix = 0, block = 0;
+
+        try {
+            await saveEditor(true);
+            let totalGateTime = 0;
+            const { done, failed } = await _runParallel(list, 3, async (sec) => {
+                _markSectionWorking(sec.idx, '③ 검증 중…');
+                const res = await fetch(`/api/doc/${currentDocId}/section/${encodeURIComponent(sec.name)}/gate`, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    const st = data.status || 'PASS';
+                    if (st === 'PASS') pass_count++;
+                    else if (st === 'NEED_FIX') need_fix++;
+                    else if (st === 'BLOCK') block++;
+                    if (data.time_s) totalGateTime += data.time_s;
+                    // Update section gate UI
+                    updateSectionGateUI(sec.idx, st);
+                    _markSectionPhase(sec.idx, 3);
+                }
+            }, (d, f) => {
+                if (ctx.lamp) ctx.lamp.textContent = `③ Gate 검증 중... ${charsLabel} · ${d}/${list.length}`;
+            });
+            // Stop lamp immediately after all sections done
+            _markBtnDone('btn-gate-all', '③ Gate(전체) ✓');
+            _stopLamp(ctx, `Gate 완료 · PASS ${pass_count} / NEED_FIX ${need_fix} / BLOCK ${block} · ${totalGateTime.toFixed(1)}s`, false);
+            // 리스트 RAG 데이터화 버튼: 전체 PASS일 때만 활성화
+            const approveBtn = document.getElementById(`approve-btn-${currentDocId}`);
+            if (approveBtn) {
+                const allSectionsPass = need_fix === 0 && block === 0 && pass_count > 0;
+                if (allSectionsPass) { approveBtn.disabled = false; approveBtn.style.opacity = '1'; approveBtn.style.cursor = 'pointer'; }
+                else { approveBtn.disabled = true; approveBtn.style.opacity = '0.4'; approveBtn.style.cursor = 'not-allowed'; }
+            }
+            // Post-processing (non-blocking, fail-safe)
+            _savePhase(currentDocId, 'gate');
+            openEditor(currentDocId).catch(e => console.warn('[GATE_ALL] editor refresh failed:', e));
+        } catch(e) {
+            console.error('[GATE_ALL]', e);
+            _stopLamp(ctx, 'Gate 검증 실패', true);
+            alert('Gate 검증 오류: ' + e.message);
+            _enableBtn('btn-gate-all', '③ Gate(전체)');
+        }
+    }
+
+    async function publishAll() {
+        if (!confirm('PASS 섹션만 RAG에 반영합니다. 진행하시겠습니까?')) return;
+        const btn = document.getElementById('btn-publish-all');
+        if (btn) { btn.disabled = true; btn.textContent = '📦 RAG 반영 중...'; }
+        const ctx = _startLamp('📦 RAG 반영 중...');
+
+        try {
+            await saveEditor(true);
+            const res = await fetch(`/api/doc/${currentDocId}/publish-all`, { method: 'POST' });
+            const text = await res.text();
+            if (!res.ok) {
+                _stopLamp(ctx, 'RAG 반영 실패', true);
+                let detail; try { detail = JSON.parse(text).detail; } catch(_) { detail = text; }
+                alert('RAG 반영 실패: ' + (detail || `HTTP ${res.status}`));
+                return;
+            }
+            const data = JSON.parse(text);
+            _stopLamp(ctx, `RAG 반영 완료 · ${data.published_count}개 반영 · ${data.excluded_count}개 제외`, false);
+            // 반영/제외 목록 모달
+            const pubList = (data.published_names || []).map(n => `<li style="color:#166534;">✅ ${n}</li>`).join('');
+            const exList = (data.excluded_names || []).map(n => `<li style="color:#991b1b;">⛔ ${n}</li>`).join('');
+            const failList = (data.failed_sections || []).map(f => `<li style="color:#dc2626;">❌ ${f.section_name}: ${f.reason}</li>`).join('');
+            showModal('📦 RAG 반영 결과',
+                `<div style="text-align:left;font-size:14px;">` +
+                (pubList ? `<strong>반영됨 (${data.published_count})</strong><ul style="margin:4px 0 12px 1.2rem;">${pubList}</ul>` : '') +
+                (exList ? `<strong>제외됨 (${data.excluded_count})</strong><ul style="margin:4px 0 12px 1.2rem;">${exList}</ul>` : '') +
+                (failList ? `<strong>실패 (${data.failed_count})</strong><ul style="margin:4px 0 12px 1.2rem;">${failList}</ul>` : '') +
+                `</div>`
+            );
+            // 리스트 상태 배지 업데이트
+            const row = document.getElementById(`row-${currentDocId}`);
+            if (row) {
+                const badge = row.querySelector('.badge');
+                if (badge) { badge.className = 'badge badge-approved'; badge.textContent = 'APPROVED'; }
+            }
+            await openEditor(currentDocId);
+        } catch(e) {
+            console.error('[PUBLISH_ALL]', e);
+            _stopLamp(ctx, 'RAG 반영 실패', true);
+            alert('RAG 반영 오류: ' + e.message);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '📦 RAG 반영'; }
+        }
+    }
+
+    async function saveEditor(silent = false) {
         const container = document.getElementById('editor-container');
         const textareas = container.querySelectorAll('textarea.editor-textarea');
         const sections = {};
@@ -761,17 +1766,23 @@
             if (name) sections[name] = ta.value;
         });
 
-        const res = await fetch(`/api/doc/${currentDocId}/sections`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sections })
-        });
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/sections`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sections })
+            });
 
-        if (res.ok) {
-            alert("저장되었습니다.");
-        } else {
-            const data = await res.json();
-            alert("저장 실패: " + (data.detail || "알 수 없는 오류"));
+            if (res.ok) {
+                if (!silent) alert("저장되었습니다.");
+            } else {
+                const errText = await res.text();
+                let errMsg;
+                try { errMsg = JSON.parse(errText).detail; } catch(_) { errMsg = errText; }
+                if (!silent) alert("저장 실패: " + (errMsg || `HTTP ${res.status}`));
+            }
+        } catch(e) {
+            if (!silent) alert("저장 실패: " + e.message);
         }
     }
 
@@ -878,24 +1889,56 @@
     async function toggleSectionSource(idx) {
         const panel = document.getElementById(`source-panel-${idx}`);
         const row = document.getElementById(`section-row-${idx}`);
+        const editorLabel = document.getElementById(`editor-label-${idx}`);
+        const ta = document.getElementById(`editor-${idx}`);
+        const hlDiv = document.getElementById(`highlight-${idx}`);
         if (!panel) return;
+
         if (panel.style.display !== 'none') {
+            // 원본 비교 닫기
             panel.style.display = 'none';
             row.classList.remove('section-row-compare');
+            if (editorLabel) editorLabel.style.display = 'none';
+            // 높이 복원: highlight가 켜져 있으면 그것 기준, 아니면 textarea 기준
+            if (ta) {
+                if (hlDiv && hlDiv.style.display !== 'none') {
+                    // highlight 모드 — hlDiv 높이만 자연스럽게
+                    hlDiv.style.height = '';
+                } else {
+                    ta.style.height = 'auto';
+                    ta.style.height = ta.scrollHeight + 'px';
+                }
+            }
             return;
         }
         const data = await loadSourceMap();
         if (!data) { alert('원본 텍스트를 불러올 수 없습니다.'); return; }
-        const ta = document.getElementById(`editor-${idx}`);
         const name = ta.dataset.sectionName;
         const matched = data.source_map[name];
         if (matched) {
-            panel.innerHTML = `<div class="source-label">📄 원본 텍스트</div><div class="source-text">${escapeHtml(matched)}</div>`;
+            panel.innerHTML = `<div class="column-label">원본 텍스트</div><div class="source-text">${escapeHtml(matched)}</div>`;
         } else {
-            panel.innerHTML = `<div class="source-label">📄 원본 텍스트 <span style="color:#dc2626;font-size:12px;">(헤딩 매칭 실패 — 다시 Manualize 해주세요)</span></div><div class="source-text">${escapeHtml(data.raw_text)}</div>`;
+            panel.innerHTML = `<div class="column-label" style="color:#dc2626;">원본 텍스트 (매칭 실패)</div><div class="source-text" style="color:#9ca3af;font-style:italic;">이 섹션에 매칭되는 원본 구간을 찾지 못했습니다.</div>`;
         }
         panel.style.display = 'block';
         row.classList.add('section-row-compare');
+        if (editorLabel) editorLabel.style.display = 'block';
+        // Sync heights: 오른쪽(textarea 또는 highlight)과 왼쪽(source) 중 큰 쪽에 맞춤
+        requestAnimationFrame(() => {
+            const sourceText = panel.querySelector('.source-text');
+            const sourceH = sourceText ? sourceText.scrollHeight : 0;
+            const isHighlight = hlDiv && hlDiv.style.display !== 'none';
+            const rightEl = isHighlight ? hlDiv : ta;
+            // 오른쪽이 hidden이면 임시로 보이게 해서 측정
+            const wasHidden = rightEl.style.display === 'none';
+            if (wasHidden) { rightEl.style.display = ''; rightEl.style.visibility = 'hidden'; }
+            const editorH = rightEl.scrollHeight;
+            if (wasHidden) { rightEl.style.display = 'none'; rightEl.style.visibility = ''; }
+            const maxH = Math.max(300, sourceH, editorH);
+            if (!isHighlight && ta) ta.style.height = maxH + 'px';
+            if (isHighlight && hlDiv) hlDiv.style.height = maxH + 'px';
+            if (sourceText) sourceText.style.height = maxH + 'px';
+        });
     }
 
     function escapeHtml(text) {
@@ -934,6 +1977,16 @@
         overflow: auto;
     }
 
+    .rag-check {
+        display: inline-block;
+        margin-left: 4px;
+        color: #10b981;
+        font-weight: bold;
+        font-size: 14px;
+        vertical-align: middle;
+        title: "RAG 데이터화 완료";
+    }
+
     .editor-modal-content {
         display: flex;
         flex-direction: column;
@@ -950,6 +2003,30 @@
 
     .editor-header h3 {
         margin-top: 0;
+    }
+
+    .manualize-lamp {
+        font-size: 13px;
+        font-weight: 600;
+        color: #8b5cf6;
+        padding: 3px 12px;
+        border-radius: 12px;
+        background: #f5f3ff;
+        animation: lamp-pulse 1.8s ease-in-out infinite;
+    }
+
+    @keyframes lamp-pulse {
+        0%, 100% { opacity: 0.4; }
+        50% { opacity: 1; }
+    }
+
+    @keyframes badge-blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
+
+    .badge-working {
+        animation: badge-blink 1s ease-in-out infinite;
     }
 
     .editor-body {
@@ -1048,6 +2125,43 @@
         overflow-y: auto;
     }
 
+    .gate-popover {
+        position: absolute;
+        z-index: 1000;
+        max-width: 360px;
+        min-width: 240px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        padding: 12px 14px;
+        font-size: 13px;
+        line-height: 1.5;
+        display: none;
+    }
+    .gate-popover-arrow {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        transform: rotate(45deg);
+    }
+    .gate-popover-arrow.arrow-top {
+        top: -6px;
+        border-bottom: none;
+        border-right: none;
+    }
+    .gate-popover-arrow.arrow-bottom {
+        bottom: -6px;
+        border-top: none;
+        border-left: none;
+    }
+    .gate-mark:hover {
+        outline: 2px solid #f59e0b;
+        outline-offset: 1px;
+    }
+
     /* Comparison modal styles */
     .compare-container {
         display: grid;
@@ -1120,13 +2234,17 @@
     }
 
     .section-row-compare .source-panel {
-        flex: 1;
+        flex: 1 1 50%;
         min-width: 0;
     }
 
     .section-row-compare .editor-panel {
-        flex: 1;
+        flex: 1 1 50%;
         min-width: 0;
+    }
+
+    .section-row-compare .editor-textarea {
+        min-height: 300px;
     }
 
     .editor-panel {
@@ -1134,15 +2252,26 @@
         min-width: 0;
     }
 
+    .evidence-panel {
+        background: #f5f3ff;
+        border: 1px solid #ddd6fe;
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin-bottom: 8px;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+
     .source-panel {
         display: none;
     }
 
-    .source-label {
+    .column-label {
         font-weight: 600;
-        font-size: 13px;
-        color: #4b5563;
+        font-size: 12px;
+        color: #6b7280;
         margin-bottom: 4px;
+        padding: 0 2px;
     }
 
     .source-text {
@@ -1154,9 +2283,9 @@
         line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;
-        max-height: 400px;
         overflow-y: auto;
         color: #374151;
+        box-sizing: border-box;
     }
 
     @media (max-width: 768px) {
