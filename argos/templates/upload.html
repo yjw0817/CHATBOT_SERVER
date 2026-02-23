@@ -400,8 +400,10 @@
         cancelBtn.textContent = '✕ 취소';
         cancelBtn.style.cssText = 'margin-left:6px;padding:2px 8px;border-radius:8px;font-size:11px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;';
         const abortCtrl = new AbortController();
+        _activeProcess = { type: 'manualize', docId, abort: abortCtrl };
         cancelBtn.onclick = async () => {
             try { await fetch(`/api/doc/${docId}/manualize-cancel`, { method: 'POST' }); } catch(e) {}
+            _activeProcess = null;
             abortCtrl.abort();
         };
         if (timerEl) timerEl.after(cancelBtn);
@@ -433,6 +435,7 @@
 
         // Cleanup helper
         function _cleanup() {
+            _activeProcess = null;
             if (timerInterval) clearInterval(timerInterval);
             if (progressIv) clearInterval(progressIv);
             if (cancelBtn.parentNode) cancelBtn.remove();
@@ -815,6 +818,14 @@
     }
 
     function closeEditor() {
+        // 매뉴얼라이즈 진행 중이면 cancel
+        if (_activeProcess && _activeProcess.type === 'manualize') {
+            const { docId, abort } = _activeProcess;
+            fetch(`/api/doc/${docId}/manualize-cancel`, { method: 'POST' }).catch(() => {});
+            if (abort) abort.abort();
+            console.log(`[closeEditor] cancelled manualize for ${docId}`);
+            _activeProcess = null;
+        }
         document.getElementById('editor-modal').style.display = 'none';
     }
 
@@ -1913,7 +1924,18 @@
         document.getElementById('result-modal').style.display = 'flex';
     }
 
+    // 진행 중인 작업 추적 (closeModal에서 cancel용)
+    let _activeProcess = null;  // { type: 'extract'|'manualize', docId: string, abort: AbortController }
+
     function closeModal() {
+        // 진행 중인 작업이 있으면 cancel
+        if (_activeProcess) {
+            const { type, docId, abort } = _activeProcess;
+            fetch(`/api/doc/${docId}/${type}-cancel`, { method: 'POST' }).catch(() => {});
+            if (abort) abort.abort();
+            console.log(`[closeModal] cancelled ${type} for ${docId}`);
+            _activeProcess = null;
+        }
         document.getElementById('result-modal').style.display = 'none';
         document.getElementById('modal-buttons').innerHTML = '';
         document.getElementById('modal-buttons').style.display = 'none';
@@ -1994,8 +2016,10 @@
         document.getElementById('result-modal').style.display = 'flex';
 
         const abortCtrl = new AbortController();
+        _activeProcess = { type: 'extract', docId, abort: abortCtrl };
         document.getElementById('extract-cancel-btn').addEventListener('click', async () => {
             try { await fetch(`/api/doc/${docId}/extract-cancel`, { method: 'POST' }); } catch(e) {}
+            _activeProcess = null;
             abortCtrl.abort();
         });
 
@@ -2047,6 +2071,7 @@
             const res = await fetch(`/api/doc/${docId}/extract-text${resumeParam}`, { method: 'POST', signal: abortCtrl.signal });
             const data = await res.json();
             clearInterval(progressIv);
+            _activeProcess = null;
 
             if (res.ok && data.success) {
                 const header = document.getElementById('extract-header');
@@ -2061,6 +2086,7 @@
             }
         } catch(e) {
             clearInterval(progressIv);
+            _activeProcess = null;
             if (e.name === 'AbortError') {
                 const header = document.getElementById('extract-header');
                 if (header) {
