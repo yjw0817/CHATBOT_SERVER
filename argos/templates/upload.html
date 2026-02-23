@@ -1927,14 +1927,16 @@
     // 진행 중인 작업 추적 (closeModal에서 cancel용)
     let _activeProcess = null;  // { type: 'extract'|'manualize', docId: string, abort: AbortController }
 
-    function closeModal() {
-        // 진행 중인 작업이 있으면 cancel
-        if (_activeProcess) {
+    function closeModal(force) {
+        // 진행 중인 작업이 있으면 cancel 후 abort (모달은 abort 핸들러에서 업데이트)
+        if (_activeProcess && !force) {
             const { type, docId, abort } = _activeProcess;
             fetch(`/api/doc/${docId}/${type}-cancel`, { method: 'POST' }).catch(() => {});
             if (abort) abort.abort();
             console.log(`[closeModal] cancelled ${type} for ${docId}`);
             _activeProcess = null;
+            // 모달은 바로 닫지 않음 — abort 핸들러가 "취소됨" 표시 후 사용자가 닫기
+            return;
         }
         document.getElementById('result-modal').style.display = 'none';
         document.getElementById('modal-buttons').innerHTML = '';
@@ -2005,12 +2007,12 @@
         const modalTitle = document.getElementById('modal-title');
         modalTitle.textContent = resumeParam ? '텍스트 추출 이어하기...' : '텍스트 추출 중...';
         modalBody.innerHTML = `
-            <div id="extract-header" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <div id="extract-header" style="position:sticky;top:-2rem;z-index:5;background:#fff;padding:8px 0 10px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e5e7eb;margin-bottom:8px;">
                 <div class="spinner"></div>
                 <span id="extract-progress-text" style="font-size:13px;color:#6b7280;">문서에서 내용을 읽어오고 있습니다...</span>
-                <button id="extract-cancel-btn" style="margin-left:auto;padding:4px 14px;border-radius:8px;font-size:12px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;z-index:10;">✕ 취소</button>
+                <button id="extract-cancel-btn" style="margin-left:auto;padding:6px 16px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid #fca5a5;background:#fef2f2;color:#dc2626;cursor:pointer;">✕ 추출 취소</button>
             </div>
-            <div id="extract-pages" style="max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px;"></div>
+            <div id="extract-pages" style="display:flex;flex-direction:column;gap:8px;padding-right:4px;"></div>
         `;
         document.getElementById('modal-buttons').style.display = 'none';
         document.getElementById('result-modal').style.display = 'flex';
@@ -2095,7 +2097,8 @@
                 if (header) {
                     const imgInfo = data.image_count > 0 ? ` · 이미지 ${data.image_count}건` : '';
                     const resumeInfo = data.resumed_from ? ` (${data.resumed_from}페이지부터 이어서)` : '';
-                    header.innerHTML = `<span style="font-size:14px;font-weight:600;color:#059669;">✓ 추출 완료 — ${data.chars.toLocaleString()}자${imgInfo}${resumeInfo}</span>`;
+                    header.innerHTML = `<span style="font-size:14px;font-weight:600;color:#059669;">✓ 추출 완료 — ${data.chars.toLocaleString()}자${imgInfo}${resumeInfo}</span>
+                        <button onclick="closeModal(true)" style="margin-left:auto;padding:6px 14px;border-radius:8px;font-size:12px;border:1px solid #d1d5db;background:#f3f4f6;color:#374151;cursor:pointer;">닫기</button>`;
                 }
                 modalTitle.textContent = '텍스트 추출 완료';
             } else {
@@ -2109,7 +2112,10 @@
                 if (header) {
                     header.innerHTML = `
                         <span style="font-size:14px;color:#dc2626;">✕ 추출 취소됨</span>
-                        <button id="extract-resume-after-cancel" style="margin-left:auto;padding:4px 14px;border-radius:8px;font-size:12px;border:1px solid #6366f1;background:#fff;color:#6366f1;cursor:pointer;">이어서 재시작</button>
+                        <div style="margin-left:auto;display:flex;gap:6px;">
+                            <button id="extract-resume-after-cancel" style="padding:6px 14px;border-radius:8px;font-size:12px;border:1px solid #6366f1;background:#fff;color:#6366f1;cursor:pointer;">이어서 재시작</button>
+                            <button onclick="closeModal(true)" style="padding:6px 14px;border-radius:8px;font-size:12px;border:1px solid #d1d5db;background:#f3f4f6;color:#374151;cursor:pointer;">닫기</button>
+                        </div>
                     `;
                     const resumeBtn = document.getElementById('extract-resume-after-cancel');
                     if (resumeBtn) {
@@ -2242,7 +2248,7 @@
     // Close modal on outside click
     document.getElementById('result-modal').addEventListener('click', function (e) {
         // 추출/매뉴얼라이즈 진행 중이면 배경 클릭으로 닫지 않음
-        if (e.target === this && !document.getElementById('extract-header')?.querySelector('.spinner') && !document.getElementById('manualize-status')?.offsetParent) closeModal();
+        if (e.target === this && !document.getElementById('extract-header')?.querySelector('.spinner') && !document.getElementById('manualize-status')?.offsetParent) closeModal(true);
     });
 </script>
 
