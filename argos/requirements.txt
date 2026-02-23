@@ -11,3 +11,4 @@ anthropic==0.39.0
 pymysql==1.1.1
 faiss-cpu==1.9.0.post1
 numpy==1.26.4
+pymupdf

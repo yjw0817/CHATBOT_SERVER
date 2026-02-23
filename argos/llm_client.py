@@ -19,12 +19,31 @@ _runtime_model: Optional[str] = None
 
 
 def set_llm_mode(mode: str):
-    """Set LLM mode at runtime. 'local' or 'remote'."""
+    """Set LLM mode at runtime. 'local' or 'remote'. Also persists to .env."""
     global _runtime_mode
     if mode not in ("local", "remote"):
         raise ValueError(f"Invalid mode: {mode}. Must be 'local' or 'remote'.")
     _runtime_mode = mode
-    print(f"[LLM_CLIENT] Mode switched to: {mode}")
+    _update_env_value("LLM_MODE", mode)
+    print(f"[LLM_CLIENT] Mode switched to: {mode} (persisted to .env)")
+
+
+def _update_env_value(key: str, value: str):
+    """Update a single key in .env file."""
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
+        return
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}=") or line.startswith(f"#{key}="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def get_llm_mode() -> str:
@@ -193,6 +212,59 @@ def is_llm_available() -> bool:
     if config["provider"] in ("ollama", "local"):
         return True
     return bool(config["api_key"])
+
+
+def ping_llm(timeout: float = 5.0) -> tuple:
+    """Quick connectivity check to LLM server. Returns (ok: bool, detail: str)."""
+    config = _get_config()
+    if not config["enabled"]:
+        return False, "LLM이 비활성화 상태입니다 (LLM_ENABLED=false)"
+    try:
+        import requests as _req
+        if config["provider"] in ("ollama", "local"):
+            base_url = (config["base_url"] or "http://127.0.0.1:11434").rstrip("/")
+            resp = _req.get(base_url, timeout=timeout)
+            if resp.ok:
+                return True, "ok"
+            return False, f"LLM 서버 응답 오류 (HTTP {resp.status_code})"
+        elif config["provider"] == "openai":
+            from openai import OpenAI
+            client = OpenAI(api_key=config["api_key"])
+            client.models.list()
+            return True, "ok"
+        else:
+            # For other providers, just check config
+            if not config["api_key"]:
+                return False, f"API 키가 설정되지 않았습니다 ({config['provider']})"
+            return True, "ok"
+    except _req.ConnectionError:
+        return False, f"LLM 서버에 연결할 수 없습니다 ({config['base_url']}). 서버가 실행 중인지 확인하세요."
+    except _req.Timeout:
+        return False, f"LLM 서버 응답 시간 초과 ({timeout}초)"
+    except Exception as e:
+        return False, f"LLM 연결 확인 실패: {str(e)}"
+
+
+def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-cloud") -> Optional[str]:
+    """Ollama Vision LLM 호출. base64 이미지 + 텍스트 프롬프트."""
+    import requests as _req
+    config = _get_config()
+    base_url = (config["base_url"] or "http://127.0.0.1:11434").rstrip("/")
+    url = f"{base_url}/api/chat"
+
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": prompt,
+            "images": [image_base64]
+        }],
+        "stream": False
+    }
+    print(f"[VISION_LLM] {url} model={model} image_size={len(image_base64)}")
+    resp = _req.post(url, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json().get("message", {}).get("content", "")
 
 
 def get_llm_info() -> dict:

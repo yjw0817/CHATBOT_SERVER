@@ -19,7 +19,7 @@ UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 # Import unified LLM client
-from llm_client import call_llm, is_llm_available, get_llm_info, LLM_MODEL, set_llm_mode, get_llm_mode, set_llm_model, get_llm_model
+from llm_client import call_llm, is_llm_available, get_llm_info, LLM_MODEL, set_llm_mode, get_llm_mode, set_llm_model, get_llm_model, ping_llm, call_vision_llm
 
 # Import RAG index (FAISS + embedding)
 import numpy as np
@@ -273,50 +273,178 @@ def list_documents(apt_id: Optional[str] = None):
 
 # ============ STEP 2: EXTRACT TEXT ============
 
+VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해."
+
+# Extract progress tracker (in-memory)
+_extract_progress = {}  # {doc_id: {"page": 1, "total_pages": 10, "images_done": 2, "images_total": 5, "status": "..."}}
+
+
+def _is_extract_cancelled(doc_id: str) -> bool:
+    return _extract_progress.get(doc_id, {}).get("cancelled", False)
+
+
+def _describe_image(image_base64: str, doc_id: str = None) -> str:
+    """Vision LLM으로 이미지 설명 생성. 실패 시 [이미지 설명 실패] 반환."""
+    if doc_id and _is_extract_cancelled(doc_id):
+        return "[이미지 설명 건너뜀: 취소됨]"
+    if doc_id and doc_id in _extract_progress:
+        _extract_progress[doc_id]["images_done"] = _extract_progress[doc_id].get("images_done", 0) + 1
+        _extract_progress[doc_id]["status"] = f"이미지 {_extract_progress[doc_id]['images_done']}/{_extract_progress[doc_id].get('images_total', '?')} Vision LLM 분석 중"
+    try:
+        desc = call_vision_llm(VISION_PROMPT, image_base64)
+        if desc and desc.strip():
+            return f"[이미지 설명: {desc.strip()}]"
+    except Exception as e:
+        print(f"[EXTRACT] Vision LLM failed: {e}")
+    return "[이미지 설명 실패]"
+
+
+@router.get("/doc/{doc_id}/extract-progress")
+def get_extract_progress(doc_id: str):
+    """Poll extract progress."""
+    return _extract_progress.get(doc_id, {})
+
+
+@router.post("/doc/{doc_id}/extract-cancel")
+def cancel_extract(doc_id: str):
+    """Cancel an in-progress extract operation."""
+    if doc_id in _extract_progress:
+        _extract_progress[doc_id]["cancelled"] = True
+        return {"success": True, "detail": "취소 요청됨"}
+    return {"success": False, "detail": "진행 중인 작업 없음"}
+
+
 @router.post("/doc/{doc_id}/extract-text")
 def extract_text(doc_id: str):
-    """Extract text from uploaded document (DOCX supported)."""
+    """Extract text from uploaded document (DOCX, PDF, TXT, MD)."""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT source_filename, source_type FROM documents WHERE doc_id = %s", (doc_id,))
     doc = cursor.fetchone()
     if not doc:
         conn.close()
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
     source_type = doc["source_type"]
     file_path = UPLOAD_DIR / f"{doc_id}.{source_type}"
-    
+
     if not file_path.exists():
         conn.close()
         raise HTTPException(status_code=404, detail="File not found on disk")
-    
+
     raw_text = ""
-    
+    image_count = 0
+
     if source_type == "docx":
         try:
             from docx import Document
+            import zipfile
+            import base64
+
+            _extract_progress[doc_id] = {"page": 0, "total_pages": 0, "images_done": 0, "images_total": 0, "status": "DOCX 텍스트 추출 중"}
+
             docx_doc = Document(str(file_path))
-            paragraphs = [p.text for p in docx_doc.paragraphs if p.text.strip()]
-            raw_text = "\n".join(paragraphs)
+            parts = []
+
+            # 단락
+            for p in docx_doc.paragraphs:
+                if p.text.strip():
+                    parts.append(p.text)
+
+            # 테이블
+            _extract_progress[doc_id]["status"] = "테이블 추출 중"
+            for table in docx_doc.tables:
+                rows_text = []
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    rows_text.append(" | ".join(cells))
+                if rows_text:
+                    parts.append("[표]\n" + "\n".join(rows_text))
+
+            # 이미지 수 미리 카운트
+            with zipfile.ZipFile(str(file_path), 'r') as zf:
+                media_files = [n for n in zf.namelist() if n.startswith("word/media/")]
+                _extract_progress[doc_id]["images_total"] = len(media_files)
+                _extract_progress[doc_id]["status"] = f"이미지 0/{len(media_files)} Vision LLM 분석 중" if media_files else "완료 중"
+
+                for name in media_files:
+                    img_bytes = zf.read(name)
+                    img_b64 = base64.b64encode(img_bytes).decode()
+                    image_count += 1
+                    print(f"[EXTRACT] DOCX image {image_count}: {name} ({len(img_bytes)} bytes)")
+                    desc = _describe_image(img_b64, doc_id)
+                    parts.append(desc)
+
+            raw_text = "\n".join(parts)
+            _extract_progress.pop(doc_id, None)
         except Exception as e:
+            _extract_progress.pop(doc_id, None)
             conn.close()
             raise HTTPException(status_code=500, detail=f"DOCX extraction failed: {str(e)}")
+
+    elif source_type == "pdf":
+        try:
+            import fitz
+            import base64
+
+            pdf_doc = fitz.open(str(file_path))
+            total_pages = len(pdf_doc)
+
+            # 이미지 포함 페이지 수 미리 카운트
+            pages_with_images = []
+            for pg_idx, pg in enumerate(pdf_doc):
+                if pg.get_images(full=True):
+                    pages_with_images.append(pg_idx)
+
+            _extract_progress[doc_id] = {"page": 0, "total_pages": total_pages, "images_done": 0, "images_total": len(pages_with_images), "status": f"0/{total_pages} 페이지"}
+            parts = []
+
+            for page_num, page in enumerate(pdf_doc):
+                _extract_progress[doc_id]["page"] = page_num + 1
+                _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
+
+                # 텍스트 추출
+                page_text = page.get_text().strip()
+                if page_text:
+                    parts.append(page_text)
+
+                # 이미지 포함 페이지 → 페이지 전체 렌더링 후 Vision LLM
+                if page_num in pages_with_images:
+                    if _is_extract_cancelled(doc_id):
+                        break
+                    image_count += 1
+                    _extract_progress[doc_id]["status"] = f"페이지 {page_num + 1} 이미지 분석 중 ({image_count}/{len(pages_with_images)})"
+                    pix = page.get_pixmap(dpi=150)
+                    img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+                    print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} ({len(img_b64)} b64 chars)")
+                    desc = _describe_image(img_b64, doc_id)
+                    parts.append(desc)
+
+            pdf_doc.close()
+            raw_text = "\n".join(parts)
+            _extract_progress.pop(doc_id, None)
+        except Exception as e:
+            _extract_progress.pop(doc_id, None)
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")
+
     elif source_type in ("txt", "md"):
         raw_text = file_path.read_text(encoding="utf-8", errors="ignore")
+
     else:
-        raw_text = f"[PDF extraction not implemented - file: {doc['source_filename']}]"
-    
+        raw_text = f"[지원하지 않는 파일 형식: {source_type}]"
+
     cursor.execute("UPDATE documents SET raw_text = %s, updated_at = %s WHERE doc_id = %s",
                    (raw_text, datetime.now().isoformat(), doc_id))
     conn.commit()
     conn.close()
-    
+
     return {
         "success": True,
         "doc_id": doc_id,
         "chars": len(raw_text),
+        "image_count": image_count,
         "preview": raw_text[:300] if raw_text else ""
     }
 
@@ -342,19 +470,29 @@ def get_char_count(doc_id: str):
     raw_text = row["raw_text"] or ""
     chars = len(raw_text)
     mode = get_llm_mode()
-    window_count = 1
-    if mode == "remote":
-        window_count = len(_split_by_headings(raw_text))
-    elif chars > MANUALIZE_HARD_LIMIT:
-        windows = _group_sections_into_windows(_split_by_headings(raw_text), MANUALIZE_WINDOW_SIZE)
-        window_count = len(windows)
+    window_count = len(_split_by_headings(raw_text))
     return {"chars": chars, "window_count": window_count, "hard_limit": MANUALIZE_HARD_LIMIT, "mode": mode}
 
 
 @router.get("/doc/{doc_id}/manualize-progress")
 def get_manualize_progress(doc_id: str):
-    """Poll manualize progress. Returns {done, total}."""
-    return _manualize_progress.get(doc_id, {"done": 0, "total": 0})
+    """Poll manualize progress. Returns {done, total, cancelled, sections}."""
+    prog = _manualize_progress.get(doc_id, {"done": 0, "total": 0})
+    return {
+        "done": prog.get("done", 0),
+        "total": prog.get("total", 0),
+        "cancelled": prog.get("cancelled", False),
+        "sections": prog.get("sections", {}),
+    }
+
+
+@router.post("/doc/{doc_id}/manualize-cancel")
+def cancel_manualize(doc_id: str):
+    """Cancel an in-progress manualize operation."""
+    if doc_id in _manualize_progress:
+        _manualize_progress[doc_id]["cancelled"] = True
+        return {"success": True, "detail": "취소 요청됨"}
+    return {"success": False, "detail": "진행 중인 작업 없음"}
 
 
 # ============ STEP 2: MANUALIZE ============
@@ -565,13 +703,18 @@ def manualize(doc_id: str, force: bool = False):
         conn.close()
         raise HTTPException(status_code=503, detail="LLM이 활성화되지 않았습니다. .env 설정을 확인하세요.")
 
+    # Quick connectivity check before starting long operation
+    llm_ok, llm_detail = ping_llm(timeout=5.0)
+    if not llm_ok:
+        conn.close()
+        raise HTTPException(status_code=503, detail=llm_detail)
+
     raw_text_chars = len(raw_text)
     mode = get_llm_mode()
-    window_count = 1
-    if mode == "remote":
-        window_count = len(_split_by_headings(raw_text))
-    elif raw_text_chars > MANUALIZE_HARD_LIMIT:
-        window_count = max(1, -(-((raw_text_chars - MANUALIZE_WINDOW_OVERLAP)) // (MANUALIZE_WINDOW_SIZE - MANUALIZE_WINDOW_OVERLAP)))
+    window_count = len(_split_by_headings(raw_text))
+
+    # 진행률 초기화 (sections: 완료된 섹션을 즉시 프론트에 스트리밍)
+    _manualize_progress[doc_id] = {"done": 0, "total": window_count, "sections": {}}
 
     try:
         if mode == "remote":
@@ -586,12 +729,19 @@ def manualize(doc_id: str, force: bool = False):
             # Local + 소형 문서: 단일 호출
             print(f"[MANUALIZE] Local single: {raw_text_chars} chars for {doc_id}")
             sections_map = _manualize_single(raw_text, doc_id)
+            _manualize_progress[doc_id] = {"done": 1, "total": 1, "sections": dict(sections_map)}
 
     except HTTPException:
         raise
     except Exception as e:
         conn.close()
         raise HTTPException(status_code=502, detail=f"Manualize 실패: {str(e)}")
+
+    # Check if cancelled
+    if _manualize_progress.get(doc_id, {}).get("cancelled"):
+        _manualize_progress.pop(doc_id, None)
+        conn.close()
+        raise HTTPException(status_code=499, detail="사용자가 Manualize를 취소했습니다.")
 
     # Save sections (gate_status stays NULL — user triggers Gate manually)
     cursor.execute("DELETE FROM manual_sections WHERE doc_id = %s", (doc_id,))
@@ -741,39 +891,63 @@ def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
         # Remote: 섹션별 순차 처리 (작은 입력 → 내용 보존 우수)
         total = len(sections)
         print(f"[MANUALIZE] Remote sequential: {total} sections for {doc_id}")
-        _manualize_progress[doc_id] = {"done": 0, "total": total}
+        _manualize_progress[doc_id] = {"done": 0, "total": total, "sections": {}}
         all_sections = {}
         for i, (_pos, section_text) in enumerate(sections):
+            # Check cancellation before each section
+            if _manualize_progress.get(doc_id, {}).get("cancelled"):
+                print(f"[MANUALIZE] Cancelled at section {i}/{total} for {doc_id}")
+                break
             if not section_text.strip():
                 _manualize_progress[doc_id]["done"] = i + 1
                 continue
             result = _process_one_window(section_text, i, total)
             _merge_sections(all_sections, result, i)
             _manualize_progress[doc_id]["done"] = i + 1
+            _manualize_progress[doc_id]["sections"] = dict(all_sections)
     else:
-        # Local: 윈도우 묶어서 병렬 처리
+        # Local: 윈도우 묶어서 병렬 처리 (진행률은 섹션 수 기준으로 표시)
         from concurrent.futures import ThreadPoolExecutor, as_completed
         windows = _group_sections_into_windows(sections, MANUALIZE_WINDOW_SIZE)
-        total = len(windows)
-        print(f"[MANUALIZE] Local parallel: {total} windows for {doc_id}")
-        _manualize_progress[doc_id] = {"done": 0, "total": total}
+        total_windows = len(windows)
+        total_sections = len(sections)
+        print(f"[MANUALIZE] Local parallel: {total_windows} windows ({total_sections} sections) for {doc_id}")
+        _manualize_progress[doc_id] = {"done": 0, "total": total_sections, "sections": {}}
+
+        # Compute how many sections each window covers (mirrors _group_sections_into_windows logic)
+        _sections_per_window = []
+        _cur_len = 0
+        _cur_cnt = 0
+        for _pos, _st in sections:
+            if _cur_len > 0 and _cur_len + len(_st) > MANUALIZE_WINDOW_SIZE:
+                _sections_per_window.append(_cur_cnt)
+                _cur_cnt = 1
+                _cur_len = len(_st)
+            else:
+                _cur_cnt += 1
+                _cur_len += len(_st)
+        if _cur_cnt > 0:
+            _sections_per_window.append(_cur_cnt)
 
         all_sections = {}
-        if total == 1:
+        if total_windows == 1:
             result = _process_one_window(windows[0], 0, 1)
             _merge_sections(all_sections, result, 0)
-            _manualize_progress[doc_id]["done"] = 1
+            _manualize_progress[doc_id]["done"] = total_sections
+            _manualize_progress[doc_id]["sections"] = dict(all_sections)
         else:
-            with ThreadPoolExecutor(max_workers=total) as executor:
+            with ThreadPoolExecutor(max_workers=total_windows) as executor:
                 futures = {
-                    executor.submit(_process_one_window, w, i, total): i
+                    executor.submit(_process_one_window, w, i, total_windows): i
                     for i, w in enumerate(windows)
                 }
                 for future in as_completed(futures):
                     i = futures[future]
                     result = future.result()
                     _merge_sections(all_sections, result, i)
-                    _manualize_progress[doc_id]["done"] = _manualize_progress[doc_id]["done"] + 1
+                    done_inc = _sections_per_window[i] if i < len(_sections_per_window) else 1
+                    _manualize_progress[doc_id]["done"] = _manualize_progress[doc_id]["done"] + done_inc
+                    _manualize_progress[doc_id]["sections"] = dict(all_sections)
 
     # 완료 후 정리
     _manualize_progress.pop(doc_id, None)
