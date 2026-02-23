@@ -1916,28 +1916,56 @@
     }
 
     async function extractText(docId, resumePage = 0) {
-        // 기존 raw_text가 있고 resumePage 지정 안 됐으면 선택 UI
+        // 기존 raw_text 확인 + 이전 중단 정보 확인
         if (resumePage === 0) {
             try {
-                const ccRes = await fetch(`/api/doc/${docId}/char-count`);
+                const [ccRes, pRes] = await Promise.all([
+                    fetch(`/api/doc/${docId}/char-count`),
+                    fetch(`/api/doc/${docId}/extract-progress`)
+                ]);
                 const cc = await ccRes.json();
+                const prog = await pRes.json();
+                const lastPage = prog.page || 0;
+                const totalPages = prog.total_pages || 0;
+                const wasCancelled = prog.cancelled || false;
+
                 if (cc.chars > 0) {
                     const modalBody = document.getElementById('modal-body');
                     const modalTitle = document.getElementById('modal-title');
                     modalTitle.textContent = '텍스트 추출';
-                    modalBody.innerHTML = `
-                        <div style="text-align:center;padding:20px;">
-                            <p style="margin-bottom:16px;color:#374151;">기존 추출된 텍스트가 있습니다 (${cc.chars.toLocaleString()}자)</p>
-                            <div style="display:flex;gap:10px;justify-content:center;">
-                                <button id="extract-restart-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">처음부터 다시</button>
-                                <button id="extract-resume-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:none;background:#6366f1;color:#fff;cursor:pointer;">이어서 추출</button>
-                            </div>
-                        </div>`;
-                    document.getElementById('modal-buttons').style.display = 'none';
-                    document.getElementById('result-modal').style.display = 'flex';
-                    document.getElementById('extract-restart-btn').onclick = () => { _doExtract(docId, 0); };
-                    document.getElementById('extract-resume-btn').onclick = () => { _doExtract(docId, -1); };
-                    return;
+
+                    // 중단된 상태가 있으면 이어하기 옵션 표시
+                    if (wasCancelled && lastPage > 0 && lastPage < totalPages) {
+                        modalBody.innerHTML = `
+                            <div style="text-align:center;padding:20px;">
+                                <p style="margin-bottom:8px;color:#374151;">기존 추출된 텍스트가 있습니다 (${cc.chars.toLocaleString()}자)</p>
+                                <p style="margin-bottom:16px;color:#6b7280;font-size:13px;">이전 추출: ${lastPage}/${totalPages} 페이지에서 중단됨</p>
+                                <div style="display:flex;gap:10px;justify-content:center;">
+                                    <button id="extract-restart-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">처음부터 다시</button>
+                                    <button id="extract-resume-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:none;background:#6366f1;color:#fff;cursor:pointer;">이어서 추출 (${lastPage + 1}p~)</button>
+                                </div>
+                            </div>`;
+                        document.getElementById('modal-buttons').style.display = 'none';
+                        document.getElementById('result-modal').style.display = 'flex';
+                        document.getElementById('extract-restart-btn').onclick = () => { _doExtract(docId, 0); };
+                        document.getElementById('extract-resume-btn').onclick = () => { _doExtract(docId, lastPage + 1); };
+                        return;
+                    } else {
+                        // 완료된 상태 — 다시 할지만 확인
+                        modalBody.innerHTML = `
+                            <div style="text-align:center;padding:20px;">
+                                <p style="margin-bottom:16px;color:#374151;">기존 추출된 텍스트가 있습니다 (${cc.chars.toLocaleString()}자)<br><span style="font-size:12px;color:#9ca3af;">다시 추출하면 기존 내용이 덮어씌워집니다</span></p>
+                                <div style="display:flex;gap:10px;justify-content:center;">
+                                    <button id="extract-cancel-choice" style="padding:8px 20px;border-radius:8px;font-size:13px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">취소</button>
+                                    <button id="extract-restart-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:none;background:#6366f1;color:#fff;cursor:pointer;">다시 추출</button>
+                                </div>
+                            </div>`;
+                        document.getElementById('modal-buttons').style.display = 'none';
+                        document.getElementById('result-modal').style.display = 'flex';
+                        document.getElementById('extract-cancel-choice').onclick = () => { closeModal(); };
+                        document.getElementById('extract-restart-btn').onclick = () => { _doExtract(docId, 0); };
+                        return;
+                    }
                 }
             } catch(e) {}
         }
@@ -1945,21 +1973,7 @@
     }
 
     async function _doExtract(docId, resumePage) {
-        // resumePage: 0=처음부터, -1=마지막 페이지 자동 감지 (char-count 기반)
-        let resumeParam = '';
-        if (resumePage === -1) {
-            // 마지막 추출 페이지 알아내기: extract-progress에 남아있으면 활용, 아니면 전체 다시
-            try {
-                const pRes = await fetch(`/api/doc/${docId}/extract-progress`);
-                const p = await pRes.json();
-                if (p.page && p.page > 0) {
-                    resumeParam = `?resume_page=${p.page}`;
-                }
-            } catch(e) {}
-            // progress 없으면 처음부터
-        } else if (resumePage > 0) {
-            resumeParam = `?resume_page=${resumePage}`;
-        }
+        let resumeParam = resumePage > 0 ? `?resume_page=${resumePage}` : '';
 
         const modalBody = document.getElementById('modal-body');
         const modalTitle = document.getElementById('modal-title');
@@ -2040,7 +2054,7 @@
                     `;
                     const resumeBtn = document.getElementById('extract-resume-after-cancel');
                     if (resumeBtn) {
-                        resumeBtn.onclick = () => extractText(docId, lastPage > 0 ? lastPage : 1);
+                        resumeBtn.onclick = () => extractText(docId, lastPage > 0 ? lastPage + 1 : 1);
                     }
                 }
                 modalTitle.textContent = '추출 취소';

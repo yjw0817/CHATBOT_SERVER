@@ -389,7 +389,11 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     _extract_progress[doc_id]["pages"][f"이미지 {image_count}"] = desc
 
             raw_text = "\n".join(parts)
-            _extract_progress.pop(doc_id, None)
+            if _is_extract_cancelled(doc_id):
+                _extract_progress[doc_id].pop("pages", None)
+                _extract_progress[doc_id]["status"] = "취소됨"
+            else:
+                _extract_progress.pop(doc_id, None)
         except Exception as e:
             _extract_progress.pop(doc_id, None)
             conn.close()
@@ -451,9 +455,17 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
             pdf_doc.close()
             raw_text = "\n".join(parts)
-            _extract_progress.pop(doc_id, None)
+            if _is_extract_cancelled(doc_id):
+                # 취소 시: progress 유지 (이어하기용), pages만 제거 (메모리 절약)
+                _extract_progress[doc_id].pop("pages", None)
+                _extract_progress[doc_id]["status"] = f"취소됨 ({_extract_progress[doc_id].get('page', 0)}/{total_pages} 페이지)"
+            else:
+                _extract_progress.pop(doc_id, None)
         except Exception as e:
-            _extract_progress.pop(doc_id, None)
+            # 에러 시에도 progress 유지 (이어하기용)
+            if doc_id in _extract_progress:
+                _extract_progress[doc_id].pop("pages", None)
+                _extract_progress[doc_id]["status"] = f"오류 ({_extract_progress[doc_id].get('page', 0)}/{_extract_progress[doc_id].get('total_pages', '?')} 페이지)"
             conn.close()
             raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")
 
