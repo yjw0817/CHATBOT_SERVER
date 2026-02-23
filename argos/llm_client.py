@@ -185,22 +185,36 @@ def _call_ollama(prompt: str, temperature: float, config: dict) -> Optional[str]
         "max_tokens": 65536,
         "options": {"num_ctx": 131072},
     }
+    import time as _time
     mode_label = config.get("mode", "?")
-    print(f"[LLM_OLLAMA] {mode_label} → {url} model={config['model']}")
-    resp = _req.post(url, json=payload, headers=headers, timeout=600)
-    resp.raise_for_status()
-    data = resp.json()
-    msg = data["choices"][0]["message"]
-    content = msg.get("content") or ""
-    # Fallback: if content is empty, check thinking/reasoning fields
-    if not content.strip():
-        for fallback_field in ("thinking", "reasoning", "reasoning_content"):
-            fallback = msg.get(fallback_field)
-            if fallback and fallback.strip():
-                print(f"[LLM_OLLAMA] content empty, using '{fallback_field}' field")
-                content = fallback
-                break
-    return content
+    prompt_preview = prompt[:80].replace('\n', ' ')
+    print(f"[LLM_OLLAMA] START {mode_label} model={config['model']} prompt_len={len(prompt)} \"{prompt_preview}...\"")
+    t0 = _time.time()
+    try:
+        resp = _req.post(url, json=payload, headers=headers, timeout=600)
+        elapsed = _time.time() - t0
+        resp.raise_for_status()
+        data = resp.json()
+        msg = data["choices"][0]["message"]
+        content = msg.get("content") or ""
+        # Fallback: if content is empty, check thinking/reasoning fields
+        if not content.strip():
+            for fallback_field in ("thinking", "reasoning", "reasoning_content"):
+                fallback = msg.get(fallback_field)
+                if fallback and fallback.strip():
+                    print(f"[LLM_OLLAMA] content empty, using '{fallback_field}' field")
+                    content = fallback
+                    break
+        print(f"[LLM_OLLAMA] OK {elapsed:.1f}s result_len={len(content)}")
+        return content
+    except _req.Timeout:
+        elapsed = _time.time() - t0
+        print(f"[LLM_OLLAMA] TIMEOUT {elapsed:.1f}s (limit=600s)")
+        raise
+    except Exception as e:
+        elapsed = _time.time() - t0
+        print(f"[LLM_OLLAMA] ERROR {elapsed:.1f}s: {type(e).__name__}: {e}")
+        raise
 
 
 def is_llm_available() -> bool:
@@ -261,10 +275,28 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         }],
         "stream": False
     }
-    print(f"[VISION_LLM] {url} model={model} image_size={len(image_base64)}")
-    resp = _req.post(url, json=payload, timeout=180)
-    resp.raise_for_status()
-    return resp.json().get("message", {}).get("content", "")
+    import time as _time
+    print(f"[VISION_LLM] START model={model} image_size={len(image_base64)} prompt={prompt[:50]}...")
+    t0 = _time.time()
+    try:
+        resp = _req.post(url, json=payload, timeout=180)
+        elapsed = _time.time() - t0
+        resp.raise_for_status()
+        result = resp.json().get("message", {}).get("content", "")
+        print(f"[VISION_LLM] OK {elapsed:.1f}s result_len={len(result)}")
+        return result
+    except _req.Timeout:
+        elapsed = _time.time() - t0
+        print(f"[VISION_LLM] TIMEOUT {elapsed:.1f}s (limit=180s)")
+        raise
+    except _req.ConnectionError as e:
+        elapsed = _time.time() - t0
+        print(f"[VISION_LLM] CONN_ERROR {elapsed:.1f}s: {e}")
+        raise
+    except Exception as e:
+        elapsed = _time.time() - t0
+        print(f"[VISION_LLM] ERROR {elapsed:.1f}s: {type(e).__name__}: {e}")
+        raise
 
 
 def get_llm_info() -> dict:

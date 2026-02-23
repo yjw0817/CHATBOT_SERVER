@@ -469,31 +469,39 @@ def extract_text(doc_id: str, resume_page: int = 0):
             _extract_progress[doc_id]["images_total"] = len(image_renders)
 
             pdf_doc.close()
+            print(f"[EXTRACT] Phase1 done: {len(page_texts)} text pages, {len(garbled_pages)} garbled, {len(image_renders)} vision targets")
 
             # Phase 2: Vision LLM 순차 호출 (Ollama 대형 모델은 동시처리 불가)
+            import time as _extract_time
             image_descs = {}  # {page_num: desc}
             vision_total = len(image_renders)
 
             if image_renders:
-                print(f"[EXTRACT] Vision LLM sequential: {vision_total} pages for {doc_id}")
+                print(f"[EXTRACT] Phase2 Vision LLM: {vision_total} pages sequential for {doc_id}")
                 for vi, (pg_num, img_b64) in enumerate(sorted(image_renders.items())):
                     if _is_extract_cancelled(doc_id):
                         print(f"[EXTRACT] Cancelled at vision {vi + 1}/{vision_total}")
                         break
                     # 텍스트 깨진 페이지는 OCR 프롬프트, 이미지 포함 페이지는 설명 프롬프트
-                    prompt = VISION_OCR_PROMPT if pg_num in garbled_pages else VISION_PROMPT
-                    label = "OCR" if pg_num in garbled_pages else "이미지 설명"
+                    is_garbled = pg_num in garbled_pages
+                    prompt = VISION_OCR_PROMPT if is_garbled else VISION_PROMPT
+                    label = "OCR" if is_garbled else "이미지 설명"
                     _extract_progress[doc_id]["status"] = f"페이지 {pg_num + 1} {label} 중 ({vi + 1}/{vision_total})"
                     _extract_progress[doc_id]["images_done"] = vi
 
+                    t0 = _extract_time.time()
                     try:
                         desc = call_vision_llm(prompt, img_b64)
+                        elapsed = _extract_time.time() - t0
                         if desc and desc.strip():
-                            desc = desc.strip() if pg_num in garbled_pages else f"[이미지 설명: {desc.strip()}]"
+                            desc = desc.strip() if is_garbled else f"[이미지 설명: {desc.strip()}]"
+                            print(f"[EXTRACT] page {pg_num + 1} {label} OK {elapsed:.1f}s len={len(desc)}")
                         else:
                             desc = f"[{label} 실패]"
+                            print(f"[EXTRACT] page {pg_num + 1} {label} EMPTY {elapsed:.1f}s")
                     except Exception as e:
-                        print(f"[EXTRACT] Vision LLM failed page {pg_num + 1}: {e}")
+                        elapsed = _extract_time.time() - t0
+                        print(f"[EXTRACT] page {pg_num + 1} {label} FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
                         desc = f"[{label} 실패]"
 
                     image_descs[pg_num] = desc
@@ -503,6 +511,8 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     combined = page_texts.get(pg_num, "")
                     combined = (combined + "\n" + desc).strip() if combined else desc
                     _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
+
+                print(f"[EXTRACT] Phase2 done: {image_count}/{vision_total} pages processed")
 
             # Phase 3: 페이지 순서대로 조합
             parts = []
