@@ -417,41 +417,76 @@ def extract_text(doc_id: str, resume_page: int = 0):
             start_page = max(0, resume_page - 1) if resume_page > 0 else 0
             remaining_image_pages = [p for p in pages_with_images if p >= start_page]
             _extract_progress[doc_id] = {"page": start_page, "total_pages": total_pages, "images_done": 0, "images_total": len(remaining_image_pages), "status": f"{start_page}/{total_pages} 페이지", "pages": {}}
-            parts = []
 
             if start_page > 0:
                 print(f"[EXTRACT] PDF resume from page {start_page + 1}/{total_pages} for {doc_id}")
 
+            # Phase 1: 텍스트 추출 + 이미지 페이지 렌더링 (순차, 빠름)
+            page_texts = {}       # {page_num: text}
+            image_renders = {}    # {page_num: img_b64}
             for page_num, page in enumerate(pdf_doc):
                 if page_num < start_page:
                     continue
-
                 _extract_progress[doc_id]["page"] = page_num + 1
                 _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
 
-                page_parts = []
-
-                # 텍스트 추출
                 page_text = page.get_text().strip()
                 if page_text:
-                    page_parts.append(page_text)
+                    page_texts[page_num] = page_text
+                    # 텍스트만 있는 페이지는 바로 스트리밍
+                    if page_num not in pages_with_images:
+                        _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_text
 
-                # 이미지 포함 페이지 → 페이지 전체 렌더링 후 Vision LLM
-                if page_num in pages_with_images:
-                    if _is_extract_cancelled(doc_id):
-                        break
-                    image_count += 1
-                    _extract_progress[doc_id]["status"] = f"페이지 {page_num + 1} 이미지 분석 중 ({image_count}/{len(remaining_image_pages)})"
+                if page_num in remaining_image_pages:
                     pix = page.get_pixmap(dpi=150)
-                    img_b64 = base64.b64encode(pix.tobytes("png")).decode()
-                    print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} ({len(img_b64)} b64 chars)")
-                    desc = _describe_image(img_b64, doc_id)
-                    page_parts.append(desc)
+                    image_renders[page_num] = base64.b64encode(pix.tobytes("png")).decode()
+                    print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height}")
 
+            pdf_doc.close()
+
+            # Phase 2: Vision LLM 병렬 호출 (병목 구간)
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            VISION_WORKERS = min(3, len(image_renders)) or 1
+            image_descs = {}  # {page_num: desc}
+
+            if image_renders:
+                _extract_progress[doc_id]["status"] = f"이미지 {len(image_renders)}페이지 Vision LLM 병렬 분석 중"
+                print(f"[EXTRACT] Vision LLM parallel: {len(image_renders)} pages, {VISION_WORKERS} workers")
+
+                def _vision_task(pg_num, img_b64):
+                    if _is_extract_cancelled(doc_id):
+                        return pg_num, "[이미지 설명 건너뜀: 취소됨]"
+                    try:
+                        desc = call_vision_llm(VISION_PROMPT, img_b64)
+                        return pg_num, f"[이미지 설명: {desc.strip()}]" if desc and desc.strip() else (pg_num, "[이미지 설명 실패]")
+                    except Exception as e:
+                        print(f"[EXTRACT] Vision LLM failed page {pg_num + 1}: {e}")
+                        return pg_num, "[이미지 설명 실패]"
+
+                with ThreadPoolExecutor(max_workers=VISION_WORKERS) as executor:
+                    futures = {executor.submit(_vision_task, pn, b64): pn for pn, b64 in image_renders.items()}
+                    for future in as_completed(futures):
+                        pg_num, desc = future.result()
+                        image_descs[pg_num] = desc
+                        image_count += 1
+                        _extract_progress[doc_id]["images_done"] = image_count
+                        _extract_progress[doc_id]["status"] = f"이미지 분석 {image_count}/{len(image_renders)}"
+                        # 해당 페이지 텍스트+이미지 합쳐서 스트리밍
+                        combined = page_texts.get(pg_num, "")
+                        combined = (combined + "\n" + desc).strip() if combined else desc
+                        _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
+
+            # Phase 3: 페이지 순서대로 조합
+            parts = []
+            all_pages = sorted(set(list(page_texts.keys()) + list(image_descs.keys())))
+            for pg_num in all_pages:
+                page_parts = []
+                if pg_num in page_texts:
+                    page_parts.append(page_texts[pg_num])
+                if pg_num in image_descs:
+                    page_parts.append(image_descs[pg_num])
                 if page_parts:
-                    page_content = "\n".join(page_parts)
-                    parts.append(page_content)
-                    _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_content
+                    parts.append("\n".join(page_parts))
 
             pdf_doc.close()
             raw_text = "\n".join(parts)

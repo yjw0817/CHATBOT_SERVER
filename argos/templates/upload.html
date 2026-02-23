@@ -1984,7 +1984,7 @@
                 <span id="extract-progress-text" style="font-size:13px;color:#6b7280;">문서에서 내용을 읽어오고 있습니다...</span>
                 <button id="extract-cancel-btn" style="margin-left:auto;padding:4px 14px;border-radius:8px;font-size:12px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;z-index:10;">✕ 취소</button>
             </div>
-            <div id="extract-pages" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;"></div>
+            <div id="extract-pages" style="max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px;"></div>
         `;
         document.getElementById('modal-buttons').style.display = 'none';
         document.getElementById('result-modal').style.display = 'flex';
@@ -2018,8 +2018,20 @@
                         renderedPages.add(pageKey);
                         const card = document.createElement('div');
                         card.style.cssText = 'background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;';
-                        const preview = content.length > 500 ? content.substring(0, 500) + '...' : content;
-                        card.innerHTML = `<div style="font-weight:600;font-size:13px;color:#4b5563;margin-bottom:6px;">📄 ${pageKey}</div><pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#374151;margin:0;max-height:200px;overflow-y:auto;">${preview.replace(/</g,'&lt;')}</pre>`;
+                        const escaped = content.replace(/</g,'&lt;');
+                        const isLong = content.length > 300;
+                        const previewText = isLong ? content.substring(0, 300).replace(/</g,'&lt;') + '...' : escaped;
+                        card.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <span style="font-weight:600;font-size:13px;color:#4b5563;">📄 ${pageKey}</span>
+                            ${isLong ? '<button class="expand-btn" style="font-size:11px;color:#6366f1;background:none;border:none;cursor:pointer;padding:2px 6px;">펼치기</button>' : ''}
+                        </div>
+                        <pre class="page-preview" style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#374151;margin:0;max-height:150px;overflow-y:auto;">${previewText}</pre>`;
+                        if (isLong) {
+                            let expanded = false;
+                            const btn = card.querySelector('.expand-btn');
+                            const pre = card.querySelector('.page-preview');
+                            btn.onclick = () => { expanded = !expanded; pre.textContent = expanded ? content : content.substring(0, 300) + '...'; pre.style.maxHeight = expanded ? 'none' : '150px'; btn.textContent = expanded ? '접기' : '펼치기'; };
+                        }
                         pagesEl.appendChild(card);
                         pagesEl.scrollTop = pagesEl.scrollHeight;
                     }
@@ -2205,9 +2217,9 @@
         background: white;
         padding: 2rem;
         border-radius: 8px;
-        max-width: 600px;
+        max-width: 800px;
         width: 90%;
-        max-height: 80vh;
+        max-height: 85vh;
         overflow: auto;
     }
 
