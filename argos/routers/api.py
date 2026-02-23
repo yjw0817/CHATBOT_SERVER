@@ -315,12 +315,14 @@ def cancel_extract(doc_id: str):
 
 
 @router.post("/doc/{doc_id}/extract-text")
-def extract_text(doc_id: str):
-    """Extract text from uploaded document (DOCX, PDF, TXT, MD)."""
+def extract_text(doc_id: str, resume_page: int = 0):
+    """Extract text from uploaded document (DOCX, PDF, TXT, MD).
+    resume_page: 0=처음부터, N=N페이지부터 이어서 (PDF only, 기존 raw_text에 append)
+    """
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT source_filename, source_type FROM documents WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT source_filename, source_type, raw_text FROM documents WHERE doc_id = %s", (doc_id,))
     doc = cursor.fetchone()
     if not doc:
         conn.close()
@@ -333,6 +335,8 @@ def extract_text(doc_id: str):
         conn.close()
         raise HTTPException(status_code=404, detail="File not found on disk")
 
+    # 이어하기: 기존 텍스트 보존
+    existing_text = (doc["raw_text"] or "") if resume_page > 0 else ""
     raw_text = ""
     image_count = 0
 
@@ -405,10 +409,19 @@ def extract_text(doc_id: str):
                 if pg.get_images(full=True):
                     pages_with_images.append(pg_idx)
 
-            _extract_progress[doc_id] = {"page": 0, "total_pages": total_pages, "images_done": 0, "images_total": len(pages_with_images), "status": f"0/{total_pages} 페이지", "pages": {}}
+            # resume_page: 0-indexed internally (resume_page=3 → skip pages 0,1,2)
+            start_page = max(0, resume_page - 1) if resume_page > 0 else 0
+            remaining_image_pages = [p for p in pages_with_images if p >= start_page]
+            _extract_progress[doc_id] = {"page": start_page, "total_pages": total_pages, "images_done": 0, "images_total": len(remaining_image_pages), "status": f"{start_page}/{total_pages} 페이지", "pages": {}}
             parts = []
 
+            if start_page > 0:
+                print(f"[EXTRACT] PDF resume from page {start_page + 1}/{total_pages} for {doc_id}")
+
             for page_num, page in enumerate(pdf_doc):
+                if page_num < start_page:
+                    continue
+
                 _extract_progress[doc_id]["page"] = page_num + 1
                 _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
 
@@ -424,7 +437,7 @@ def extract_text(doc_id: str):
                     if _is_extract_cancelled(doc_id):
                         break
                     image_count += 1
-                    _extract_progress[doc_id]["status"] = f"페이지 {page_num + 1} 이미지 분석 중 ({image_count}/{len(pages_with_images)})"
+                    _extract_progress[doc_id]["status"] = f"페이지 {page_num + 1} 이미지 분석 중 ({image_count}/{len(remaining_image_pages)})"
                     pix = page.get_pixmap(dpi=150)
                     img_b64 = base64.b64encode(pix.tobytes("png")).decode()
                     print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} ({len(img_b64)} b64 chars)")
@@ -450,6 +463,12 @@ def extract_text(doc_id: str):
     else:
         raw_text = f"[지원하지 않는 파일 형식: {source_type}]"
 
+    # 이어하기: 기존 텍스트 + 새 텍스트 합침
+    if existing_text and raw_text:
+        raw_text = existing_text + "\n" + raw_text
+    elif existing_text:
+        raw_text = existing_text
+
     cursor.execute("UPDATE documents SET raw_text = %s, updated_at = %s WHERE doc_id = %s",
                    (raw_text, datetime.now().isoformat(), doc_id))
     conn.commit()
@@ -459,6 +478,7 @@ def extract_text(doc_id: str):
         "success": True,
         "doc_id": doc_id,
         "chars": len(raw_text),
+        "resumed_from": resume_page if resume_page > 0 else None,
         "image_count": image_count,
         "preview": raw_text[:300] if raw_text else ""
     }

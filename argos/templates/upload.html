@@ -117,7 +117,7 @@
     <div class="modal-content">
         <span class="close" onclick="closeModal()">&times;</span>
         <h3 id="modal-title">결과</h3>
-        <pre id="modal-body"></pre>
+        <div id="modal-body"></div>
         <div id="modal-buttons" style="display:none;margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;">
         </div>
     </div>
@@ -1915,15 +1915,60 @@
         document.getElementById('modal-buttons').style.display = 'none';
     }
 
-    async function extractText(docId) {
+    async function extractText(docId, resumePage = 0) {
+        // 기존 raw_text가 있고 resumePage 지정 안 됐으면 선택 UI
+        if (resumePage === 0) {
+            try {
+                const ccRes = await fetch(`/api/doc/${docId}/char-count`);
+                const cc = await ccRes.json();
+                if (cc.chars > 0) {
+                    const modalBody = document.getElementById('modal-body');
+                    const modalTitle = document.getElementById('modal-title');
+                    modalTitle.textContent = '텍스트 추출';
+                    modalBody.innerHTML = `
+                        <div style="text-align:center;padding:20px;">
+                            <p style="margin-bottom:16px;color:#374151;">기존 추출된 텍스트가 있습니다 (${cc.chars.toLocaleString()}자)</p>
+                            <div style="display:flex;gap:10px;justify-content:center;">
+                                <button id="extract-restart-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:1px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">처음부터 다시</button>
+                                <button id="extract-resume-btn" style="padding:8px 20px;border-radius:8px;font-size:13px;border:none;background:#6366f1;color:#fff;cursor:pointer;">이어서 추출</button>
+                            </div>
+                        </div>`;
+                    document.getElementById('modal-buttons').style.display = 'none';
+                    document.getElementById('result-modal').style.display = 'flex';
+                    document.getElementById('extract-restart-btn').onclick = () => { _doExtract(docId, 0); };
+                    document.getElementById('extract-resume-btn').onclick = () => { _doExtract(docId, -1); };
+                    return;
+                }
+            } catch(e) {}
+        }
+        _doExtract(docId, resumePage);
+    }
+
+    async function _doExtract(docId, resumePage) {
+        // resumePage: 0=처음부터, -1=마지막 페이지 자동 감지 (char-count 기반)
+        let resumeParam = '';
+        if (resumePage === -1) {
+            // 마지막 추출 페이지 알아내기: extract-progress에 남아있으면 활용, 아니면 전체 다시
+            try {
+                const pRes = await fetch(`/api/doc/${docId}/extract-progress`);
+                const p = await pRes.json();
+                if (p.page && p.page > 0) {
+                    resumeParam = `?resume_page=${p.page}`;
+                }
+            } catch(e) {}
+            // progress 없으면 처음부터
+        } else if (resumePage > 0) {
+            resumeParam = `?resume_page=${resumePage}`;
+        }
+
         const modalBody = document.getElementById('modal-body');
         const modalTitle = document.getElementById('modal-title');
-        modalTitle.textContent = '텍스트 추출 중...';
+        modalTitle.textContent = resumeParam ? '텍스트 추출 이어하기...' : '텍스트 추출 중...';
         modalBody.innerHTML = `
             <div id="extract-header" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
                 <div class="spinner"></div>
                 <span id="extract-progress-text" style="font-size:13px;color:#6b7280;">문서에서 내용을 읽어오고 있습니다...</span>
-                <button id="extract-cancel-btn" style="margin-left:auto;padding:4px 14px;border-radius:8px;font-size:12px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;">✕ 취소</button>
+                <button id="extract-cancel-btn" style="margin-left:auto;padding:4px 14px;border-radius:8px;font-size:12px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;z-index:10;">✕ 취소</button>
             </div>
             <div id="extract-pages" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;"></div>
         `;
@@ -1931,22 +1976,21 @@
         document.getElementById('result-modal').style.display = 'flex';
 
         const abortCtrl = new AbortController();
-        const cancelBtn = document.getElementById('extract-cancel-btn');
-        if (cancelBtn) {
-            cancelBtn.onclick = async () => {
-                try { await fetch(`/api/doc/${docId}/extract-cancel`, { method: 'POST' }); } catch(e) {}
-                abortCtrl.abort();
-            };
-        }
+        document.getElementById('extract-cancel-btn').addEventListener('click', async () => {
+            try { await fetch(`/api/doc/${docId}/extract-cancel`, { method: 'POST' }); } catch(e) {}
+            abortCtrl.abort();
+        });
 
         // Poll extract progress + stream pages
         const progressEl = document.getElementById('extract-progress-text');
         const pagesEl = document.getElementById('extract-pages');
         let renderedPages = new Set();
+        let lastPage = 0;
         const progressIv = setInterval(async () => {
             try {
                 const pRes = await fetch(`/api/doc/${docId}/extract-progress`);
                 const p = await pRes.json();
+                if (p.page) lastPage = p.page;
                 if (p.status && progressEl) {
                     let detail = p.status;
                     if (p.total_pages > 0) detail = `${p.page}/${p.total_pages} 페이지`;
@@ -1970,16 +2014,16 @@
         }, 1500);
 
         try {
-            const res = await fetch(`/api/doc/${docId}/extract-text`, { method: 'POST', signal: abortCtrl.signal });
+            const res = await fetch(`/api/doc/${docId}/extract-text${resumeParam}`, { method: 'POST', signal: abortCtrl.signal });
             const data = await res.json();
             clearInterval(progressIv);
 
             if (res.ok && data.success) {
-                // Remove spinner, update header
                 const header = document.getElementById('extract-header');
                 if (header) {
                     const imgInfo = data.image_count > 0 ? ` · 이미지 ${data.image_count}건` : '';
-                    header.innerHTML = `<span style="font-size:14px;font-weight:600;color:#059669;">✓ 추출 완료 — ${data.chars.toLocaleString()}자${imgInfo}</span>`;
+                    const resumeInfo = data.resumed_from ? ` (${data.resumed_from}페이지부터 이어서)` : '';
+                    header.innerHTML = `<span style="font-size:14px;font-weight:600;color:#059669;">✓ 추출 완료 — ${data.chars.toLocaleString()}자${imgInfo}${resumeInfo}</span>`;
                 }
                 modalTitle.textContent = '텍스트 추출 완료';
             } else {
@@ -1989,7 +2033,16 @@
             clearInterval(progressIv);
             if (e.name === 'AbortError') {
                 const header = document.getElementById('extract-header');
-                if (header) header.innerHTML = '<span style="font-size:14px;color:#dc2626;">✕ 추출 취소됨 (남은 이미지 분석 건너뜀)</span>';
+                if (header) {
+                    header.innerHTML = `
+                        <span style="font-size:14px;color:#dc2626;">✕ 추출 취소됨</span>
+                        <button id="extract-resume-after-cancel" style="margin-left:auto;padding:4px 14px;border-radius:8px;font-size:12px;border:1px solid #6366f1;background:#fff;color:#6366f1;cursor:pointer;">이어서 재시작</button>
+                    `;
+                    const resumeBtn = document.getElementById('extract-resume-after-cancel');
+                    if (resumeBtn) {
+                        resumeBtn.onclick = () => extractText(docId, lastPage > 0 ? lastPage : 1);
+                    }
+                }
                 modalTitle.textContent = '추출 취소';
             } else {
                 showModal('오류', '네트워크 오류: ' + e.message);
