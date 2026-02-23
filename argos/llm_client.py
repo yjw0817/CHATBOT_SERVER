@@ -262,7 +262,7 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         "stream": False
     }
     print(f"[VISION_LLM] {url} model={model} image_size={len(image_base64)}")
-    resp = _req.post(url, json=payload, timeout=120)
+    resp = _req.post(url, json=payload, timeout=180)
     resp.raise_for_status()
     return resp.json().get("message", {}).get("content", "")
 
