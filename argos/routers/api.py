@@ -447,109 +447,112 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     print(f"[GARBLED_CHECK] page={log_page + 1} len={len(content)} korean={korean} alpha={alpha_num} ratio={ratio:.2f} → {'GARBLED' if garbled else 'OK'} preview={preview}")
                 return garbled
 
-            # Phase 1: 텍스트 추출 + 렌더링 대상 결정 (순차, 빠름)
-            page_texts = {}       # {page_num: text}
-            image_renders = {}    # {page_num: img_b64}
-            garbled_pages = set()
-            for page_num, page in enumerate(pdf_doc):
-                if page_num < start_page:
-                    continue
-                _extract_progress[doc_id]["page"] = page_num + 1
-                _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
-
-                page_text = page.get_text().strip()
-                if page_text and not _is_garbled(page_text, log_page=page_num):
-                    page_texts[page_num] = page_text
-                    # 텍스트 정상 + 이미지 없는 페이지는 바로 스트리밍
-                    if page_num not in pages_with_images:
-                        _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_text
-                elif page_text:
-                    # 텍스트 깨짐 → Vision LLM으로 대체
-                    garbled_pages.add(page_num)
-                    print(f"[EXTRACT] PDF page {page_num + 1}: garbled text detected, will use Vision LLM")
-
-                # 이미지 포함 페이지 또는 텍스트 깨진 페이지 → 렌더링
-                if page_num in remaining_image_pages or page_num in garbled_pages:
-                    render_dpi = 200 if page_num in garbled_pages else 150  # OCR은 높은 DPI
-                    pix = page.get_pixmap(dpi=render_dpi)
-                    image_renders[page_num] = base64.b64encode(pix.tobytes("png")).decode()
-                    print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} dpi={render_dpi}")
-
-            _extract_progress[doc_id]["images_total"] = len(image_renders)
-
-            pdf_doc.close()
-            print(f"[EXTRACT] Phase1 done: {len(page_texts)} text pages, {len(garbled_pages)} garbled, {len(image_renders)} vision targets")
-
-            # Phase 2: Vision LLM 병렬 호출 (2 workers — Ollama 큐 대기 고려)
+            # 파이프라인: 페이지 스캔 + Vision LLM 동시 진행
             from concurrent.futures import ThreadPoolExecutor, as_completed
             import time as _extract_time
             import threading
-            image_descs = {}  # {page_num: desc}
-            vision_total = len(image_renders)
+
+            page_texts = {}       # {page_num: text}
+            image_descs = {}      # {page_num: desc}
+            garbled_pages = set()
             _vision_lock = threading.Lock()
+            vision_futures = []
+            vision_submitted = 0
 
-            if image_renders:
-                VISION_WORKERS = min(2, vision_total)
-                print(f"[EXTRACT] Phase2 Vision LLM: {vision_total} pages, {VISION_WORKERS} workers for {doc_id}")
-
-                def _vision_task(pg_num, img_b64):
-                    if _is_extract_cancelled(doc_id):
-                        return pg_num, "[건너뜀: 취소됨]"
-                    is_ocr = pg_num in garbled_pages
-                    prompt = VISION_OCR_PROMPT if is_ocr else VISION_PROMPT
-                    label = "OCR" if is_ocr else "이미지 설명"
-                    t0 = _extract_time.time()
-                    try:
-                        desc = call_vision_llm(prompt, img_b64)
-                        elapsed = _extract_time.time() - t0
-                        if desc and desc.strip():
-                            desc = desc.strip()
-                            ocr_preview = desc[:200].replace('\n', ' ')
-                            print(f"[EXTRACT] page {pg_num + 1} {label} raw_preview: {ocr_preview}")
-                            # OCR 결과 품질 검증
-                            if is_ocr and _is_garbled(desc, log_page=pg_num):
-                                # 1차 실패 → 다른 프롬프트로 재시도
-                                print(f"[EXTRACT] page {pg_num + 1} OCR garbled, retrying with alt prompt...")
-                                if not _is_extract_cancelled(doc_id):
-                                    desc2 = call_vision_llm(VISION_OCR_RETRY_PROMPT, img_b64)
-                                    if desc2 and desc2.strip():
-                                        desc2 = desc2.strip()
-                                        retry_preview = desc2[:200].replace('\n', ' ')
-                                        print(f"[EXTRACT] page {pg_num + 1} OCR retry raw_preview: {retry_preview}")
-                                        if not _is_garbled(desc2, log_page=pg_num):
-                                            desc = desc2
-                                            print(f"[EXTRACT] page {pg_num + 1} OCR retry SUCCESS")
-                                        else:
-                                            print(f"[EXTRACT] page {pg_num + 1} OCR retry also garbled")
-                                            desc = f"[OCR 인식 불완전 (페이지 {pg_num + 1})]\n{desc2}"
+            def _vision_task(pg_num, img_b64, is_ocr):
+                if _is_extract_cancelled(doc_id):
+                    return pg_num, "[건너뜀: 취소됨]"
+                prompt = VISION_OCR_PROMPT if is_ocr else VISION_PROMPT
+                label = "OCR" if is_ocr else "이미지 설명"
+                t0 = _extract_time.time()
+                try:
+                    desc = call_vision_llm(prompt, img_b64)
+                    elapsed = _extract_time.time() - t0
+                    if desc and desc.strip():
+                        desc = desc.strip()
+                        ocr_preview = desc[:200].replace('\n', ' ')
+                        print(f"[EXTRACT] page {pg_num + 1} {label} raw_preview: {ocr_preview}")
+                        # OCR 결과 품질 검증
+                        if is_ocr and _is_garbled(desc, log_page=pg_num):
+                            print(f"[EXTRACT] page {pg_num + 1} OCR garbled, retrying...")
+                            if not _is_extract_cancelled(doc_id):
+                                desc2 = call_vision_llm(VISION_OCR_RETRY_PROMPT, img_b64)
+                                if desc2 and desc2.strip():
+                                    desc2 = desc2.strip()
+                                    if not _is_garbled(desc2, log_page=pg_num):
+                                        desc = desc2
+                                        print(f"[EXTRACT] page {pg_num + 1} OCR retry SUCCESS")
                                     else:
-                                        desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
-                            elif not is_ocr:
-                                desc = f"[이미지 설명: {desc}]"
-                            print(f"[EXTRACT] page {pg_num + 1} {label} DONE {elapsed:.1f}s len={len(desc)}")
-                        else:
-                            desc = f"[{label} 실패]"
-                            print(f"[EXTRACT] page {pg_num + 1} {label} EMPTY {elapsed:.1f}s")
-                    except Exception as e:
-                        elapsed = _extract_time.time() - t0
-                        print(f"[EXTRACT] page {pg_num + 1} {label} FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
+                                        desc = f"[OCR 인식 불완전 (페이지 {pg_num + 1})]\n{desc2}"
+                                else:
+                                    desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
+                        elif not is_ocr:
+                            desc = f"[이미지 설명: {desc}]"
+                        print(f"[EXTRACT] page {pg_num + 1} {label} DONE {elapsed:.1f}s len={len(desc)}")
+                    else:
                         desc = f"[{label} 실패]"
-                    return pg_num, desc
+                        print(f"[EXTRACT] page {pg_num + 1} {label} EMPTY {elapsed:.1f}s")
+                except Exception as e:
+                    elapsed = _extract_time.time() - t0
+                    print(f"[EXTRACT] page {pg_num + 1} {label} FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
+                    desc = f"[{label} 실패]"
+                return pg_num, desc
 
-                with ThreadPoolExecutor(max_workers=VISION_WORKERS) as executor:
-                    futures = {executor.submit(_vision_task, pn, b64): pn for pn, b64 in sorted(image_renders.items())}
-                    for future in as_completed(futures):
-                        pg_num, desc = future.result()
-                        with _vision_lock:
-                            image_descs[pg_num] = desc
-                            image_count += 1
-                            _extract_progress[doc_id]["images_done"] = image_count
-                            _extract_progress[doc_id]["status"] = f"Vision LLM {image_count}/{vision_total}"
-                            combined = page_texts.get(pg_num, "")
-                            combined = (combined + "\n" + desc).strip() if combined else desc
-                            _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
+            executor = ThreadPoolExecutor(max_workers=2)
 
-                print(f"[EXTRACT] Phase2 done: {image_count}/{vision_total} pages processed")
+            for page_num, page in enumerate(pdf_doc):
+                if page_num < start_page:
+                    continue
+                if _is_extract_cancelled(doc_id):
+                    break
+                _extract_progress[doc_id]["page"] = page_num + 1
+                _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 분석"
+
+                page_text = page.get_text().strip()
+                needs_vision = False
+
+                if page_text and not _is_garbled(page_text, log_page=page_num):
+                    page_texts[page_num] = page_text
+                    if page_num not in pages_with_images:
+                        _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_text
+                    else:
+                        needs_vision = True  # 텍스트 OK + 이미지 있음
+                elif page_text:
+                    garbled_pages.add(page_num)
+                    needs_vision = True
+                    print(f"[EXTRACT] PDF page {page_num + 1}: garbled → Vision LLM")
+                elif page_num in remaining_image_pages:
+                    needs_vision = True
+
+                # 렌더링 + 즉시 Vision LLM 제출
+                if needs_vision:
+                    is_ocr = page_num in garbled_pages
+                    render_dpi = 200 if is_ocr else 150
+                    pix = page.get_pixmap(dpi=render_dpi)
+                    img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+                    print(f"[EXTRACT] PDF page {page_num + 1} render {pix.width}x{pix.height} → Vision LLM 제출")
+                    future = executor.submit(_vision_task, page_num, img_b64, is_ocr)
+                    vision_futures.append(future)
+                    vision_submitted += 1
+                    _extract_progress[doc_id]["images_total"] = vision_submitted
+
+            pdf_doc.close()
+            print(f"[EXTRACT] Scan done: {len(page_texts)} text, {len(garbled_pages)} garbled, {vision_submitted} vision submitted")
+
+            # Vision LLM 결과 수집 (이미 병렬 진행 중)
+            for future in as_completed(vision_futures):
+                pg_num, desc = future.result()
+                with _vision_lock:
+                    image_descs[pg_num] = desc
+                    image_count += 1
+                    _extract_progress[doc_id]["images_done"] = image_count
+                    _extract_progress[doc_id]["status"] = f"Vision LLM {image_count}/{vision_submitted}"
+                    combined = page_texts.get(pg_num, "")
+                    combined = (combined + "\n" + desc).strip() if combined else desc
+                    _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
+
+            executor.shutdown(wait=False)
+            print(f"[EXTRACT] Vision done: {image_count}/{vision_submitted} pages processed")
 
             # Phase 3: 페이지 순서대로 조합
             parts = []
