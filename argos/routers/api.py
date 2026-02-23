@@ -274,38 +274,22 @@ def list_documents(apt_id: Optional[str] = None):
 # ============ STEP 2: EXTRACT TEXT ============
 
 VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해."
-
-# PaddleOCR 싱글톤 (한국어 OCR)
-_paddle_ocr = None
-
-def _get_paddle_ocr():
-    global _paddle_ocr
-    if _paddle_ocr is None:
-        os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-        from paddleocr import PaddleOCR
-        _paddle_ocr = PaddleOCR(use_angle_cls=True, lang='korean')
-        print("[EXTRACT] PaddleOCR initialized (korean)")
-    return _paddle_ocr
+VISION_OCR_PROMPT = "이 이미지의 모든 텍스트를 정확히 읽어서 그대로 출력해. 내용을 해석하거나 요약하지 말고 텍스트만 추출해."
 
 
-def _paddle_ocr_image(img_b64: str) -> str:
-    """PaddleOCR로 base64 이미지에서 텍스트 추출."""
-    import io
-    from PIL import Image
-    ocr = _get_paddle_ocr()
-    img_bytes = base64.b64decode(img_b64)
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")  # RGBA→RGB 변환
-    img_np = np.array(img)
-    result = ocr.ocr(img_np, cls=True)
-    if not result or not result[0]:
-        return ""
-    lines = []
-    for line in result[0]:
-        if line and line[1]:
-            text = line[1][0]
-            if text and text.strip():
-                lines.append(text.strip())
-    return "\n".join(lines)
+def _render_page_pypdfium2(pdf_path: str, page_num: int, dpi: int = 200) -> str:
+    """pypdfium2(Chrome PDF엔진)로 페이지 렌더링 → base64 PNG. 한국어 폰트 깨짐 해결."""
+    import pypdfium2 as pdfium
+    import base64, io
+    pdf = pdfium.PdfDocument(pdf_path)
+    page = pdf[page_num]
+    bitmap = page.render(scale=dpi / 72)
+    pil_image = bitmap.to_pil()
+    buf = io.BytesIO()
+    pil_image.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    pdf.close()
+    return b64
 
 
 # Extract progress tracker (in-memory)
@@ -509,38 +493,40 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     print(f"[EXTRACT] vision callback error: {e}")
 
             def _vision_task(pg_num, is_ocr):
-                """워커: PDF 렌더링 + OCR/Vision 처리."""
+                """워커: PDF 렌더링 + OCR/Vision 처리.
+                is_ocr=True: 깨진 텍스트 → pypdfium2 렌더링 + Vision LLM OCR
+                is_ocr=False: 이미지 페이지 → fitz 렌더링 + Vision LLM 이미지설명
+                """
                 if _is_extract_cancelled(doc_id):
                     return pg_num, "[건너뜀: 취소됨]"
                 t0 = _extract_time.time()
 
-                # 워커에서 PDF 열고 렌더링 (스레드세이프)
-                render_dpi = 300 if is_ocr else 150
-                worker_pdf = fitz.open(pdf_path_str)
-                pix = worker_pdf[pg_num].get_pixmap(dpi=render_dpi)
-                img_b64 = base64.b64encode(pix.tobytes("png")).decode()
-                worker_pdf.close()
-                print(f"[EXTRACT] page {pg_num + 1} render {pix.width}x{pix.height} dpi={render_dpi}")
-
                 if is_ocr:
-                    # 깨진 텍스트 → PaddleOCR
+                    # 깨진 텍스트 → pypdfium2로 렌더링 (한국어 폰트 정상 처리)
                     try:
-                        desc = _paddle_ocr_image(img_b64)
+                        img_b64 = _render_page_pypdfium2(pdf_path_str, pg_num, dpi=200)
+                        print(f"[EXTRACT] page {pg_num + 1} pypdfium2 render dpi=200")
+                        desc = call_vision_llm(VISION_OCR_PROMPT, img_b64)
                         elapsed = _extract_time.time() - t0
                         if desc and desc.strip():
                             desc = desc.strip()
                             preview = desc[:200].replace('\n', ' ')
-                            print(f"[EXTRACT] page {pg_num + 1} PaddleOCR OK {elapsed:.1f}s len={len(desc)} preview: {preview}")
+                            print(f"[EXTRACT] page {pg_num + 1} OCR OK {elapsed:.1f}s len={len(desc)} preview: {preview}")
                         else:
                             desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
-                            print(f"[EXTRACT] page {pg_num + 1} PaddleOCR EMPTY {elapsed:.1f}s")
+                            print(f"[EXTRACT] page {pg_num + 1} OCR EMPTY {elapsed:.1f}s")
                     except Exception as e:
                         elapsed = _extract_time.time() - t0
-                        print(f"[EXTRACT] page {pg_num + 1} PaddleOCR FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
+                        print(f"[EXTRACT] page {pg_num + 1} OCR FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
                         desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
                 else:
-                    # 이미지 페이지 → Vision LLM
+                    # 이미지 페이지 → fitz 렌더링 + Vision LLM 이미지설명
                     try:
+                        worker_pdf = fitz.open(pdf_path_str)
+                        pix = worker_pdf[pg_num].get_pixmap(dpi=150)
+                        img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+                        worker_pdf.close()
+                        print(f"[EXTRACT] page {pg_num + 1} fitz render {pix.width}x{pix.height} dpi=150")
                         desc = call_vision_llm(VISION_PROMPT, img_b64)
                         elapsed = _extract_time.time() - t0
                         if desc and desc.strip():
@@ -579,7 +565,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 elif page_text:
                     garbled_pages.add(page_num)
                     needs_vision = True
-                    print(f"[EXTRACT] PDF page {page_num + 1}: garbled → Vision LLM")
+                    print(f"[EXTRACT] PDF page {page_num + 1}: garbled → pypdfium2 + Vision OCR")
                 elif page_num in remaining_image_pages:
                     needs_vision = True
 
