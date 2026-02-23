@@ -1,0 +1,401 @@
+Okay, let's tackle this RAG chunk enhancement task. The user wants me to act as an editor who reorganizes the existing raw_text into a self-contained manual section without adding new info. The key points are to merge related content from the same document and avoid adding new data.
+
+First, I'll look at the input section_text. It's a brief overview of ARGOS SpoQ system, mentioning main features, header, sidebar menus. The raw_text is more detailed, with sections on system overview, screen layout, menu details, etc.
+
+My goal is to take the raw_text and restructure it so that the section_text becomes a standalone manual. That means consolidating all related info from the raw_text into the section_text's structure without introducing new info.
+
+Let me check the raw_text sections. The main sections are System Overview, Screen Composition, Permission Settings, Center Management, Customer Management, etc.
+
+The original section_text mentions:
+- Main features: members, instructors, sales, lockers, GX/PT, products, permissions
+- Top header: member search bar, registration button, profile menu
+- Sidebar: 9 main menus
+
+In the raw_text, these are spread across sections 1, 2, 3, 4, 5, etc. So I need to pull all related info into the section_text structure.
+
+For example, the main features in section_text should be expanded with the details from the System Overview (section 1) and maybe the Screen Composition (section 2). But I need to check if the raw_text has the exact details.
+
+Wait, the raw_text's section 1 lists the main features as:
+- Member management (registration, attendance, tracking)
+- Instructor management (schedule, annual leave, salary)
+- Sales/payment management
+- Locker management
+- Group classes (GX) and personal training (PT)
+- Product sales/purchase
+- Permissions/user management
+
+The section_text says "회원, 강사, 매출, 락커, GX/PT, 상품 및 권한 관리" which matches. So I should list the main features as bullet points based on the raw_text's section 1.
+
+Next, the top header in section_text mentions "회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴". In raw_text section 2, the top header has:
+- Left: Logo
+- Right: Member search bar, Register button, Profile menu
+
+So I'll combine that into the top header description.
+
+Sidebar menus: section_text lists 9 menus. Raw_text section 2 lists them with numbers. Need to list them as per the raw_text but in a clean bullet point format. Wait, the section_text already lists the 9 menus, but the raw_text has more details. However, the instruction says not to add new info. So I should just list the menu names as per section_text but maybe add the raw_text's descriptions if they're part of the existing content.
+
+Wait, the section_text says "좌측 사이드바: 권한설정, 정보(대시보드/체크인), 센터관리, 고객관리, 강사관리, 매출 현황 등 9개 주요 메뉴 제공". The raw_text lists the 9 menus in section 2. So I need to list all 9 menus with their sub-items as per the raw_text.
+
+Wait, the raw_text's section 2 lists the sidebar menus with numbers 1-9 and their sub-items. For example, menu 1 is "권한설정 - 권한관리, 권한부여관리". So the section_text's "권한설정" should be expanded to include the sub-items from the raw_text.
+
+But the section_text is supposed to be a standalone manual. So the main point is to have the 9 menus listed with their main sub-items as per the raw_text.
+
+Wait, the task is to reorganize the raw_text into the section_text structure. So the section_text is the outline, and the raw_text has the details. So I need to take the details from raw_text and fit them into the section_text's structure.
+
+So for example, the section_text's main features bullet points should be expanded with the details from raw_text's section 1.
+
+Wait, the section_text's main features are just a list, but the raw_text's section 1 has more details. So the improved section_text should have the main features with the sub-items from raw_text.
+
+Wait, the user said "동일 문서(raw_text) 내부의 관련 내용을 모아 재구성하는 것입니다." So I need to merge all the related parts from raw_text into the section_text's structure.
+
+Let me map the section_text to the raw_text:
+
+- section_text: "주요 기능: 회원, 강사, 매출, 락커, GX/PT, 상품 및 권한 관리"
+
+In raw_text, section 1 lists these as bullet points under "주요 기능", so I can list them as:
+
+- 회원 관리: 가입, 등록, 출석, 상태 추적
+- 강사 관리: 일정, 연차, 수당 관리
+- 매출 및 결제 관리
+- 락커(사물함) 관리
+- 그룹수업(GX) 및 개인레슨(PT) 관리
+- 상품(종목) 구매 및 판매
+- 권한 및 사용자 관리
+
+This is directly from raw_text section 1.
+
+Next, section_text mentions "상단 헤더: 회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴 구성". The raw_text section 2 says:
+
+"상단 헤더: 좌측(ARGOS SpoQ 로고), 우측(회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴)"
+
+So I'll write that as:
+
+- 상단 헤더: 좌측에 ARGOS SpoQ 로고, 우측에 회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴
+
+Then, the sidebar: section_text lists the 9 menus. The raw_text section 2 lists them with numbers and sub-items. So I should list each menu with its sub-items as per the raw_text.
+
+For example:
+
+- 권한설정: 권한관리, 권한부여관리
+- 정보: 대시보드(통합정보), 체크인(입장)
+- 센터관리: 공지사항, 락커, 그룹수업, 상품 관리
+- 고객관리: 회원조회, 출석(현황/기록), 휴회, 양도 현황
+- 강사관리: 강사정보, 연차, 수당, PT/GX 현황
+- 상품 구매 관리: 구매, 판매, 결제, 미수금
+- 상품 보내기 관리: 각종 보내기 기능
+- 매출 현황: 전체/환불/PT 매출
+- 변경내역보기: 각종 변경 내역
+
+Wait, the raw_text section 2 lists them as:
+
+1. 권한설정 - 권한관리, 권한부여관리
+2. 정보 - 통합정보(대시보드), 체크인(입장)
+3. 센터관리 - 공지사항, 락커, 그룹수업, 상품 관리
+4. 고객관리 - 회원조회, 출석(현황/기록), 휴회, 양도 현황
+5. 강사관리 - 강사정보, 연차, 수당, PT/GX 현황
+6. 상품 구매 관리 - 구매, 판매, 결제, 미수금
+7. 상품 보내기 관리 - 각종 보내기 기능
+8. 매출 현황 - 전체/환불/PT 매출
+9. 변경내역보기 - 각종 변경 내역
+
+So the improved section_text should list these 9 menus with their sub-items. The original section_text just lists the menu names, but the raw_text has the sub-items, so I should include them.
+
+Now, check for duplicates. For example, the raw_text has "매출 현황" under sidebar, but in section 1, it's under "매출 및 결제 관리". Wait, in the main features, it's listed as "매출 및 결제 관리", but the sidebar menu is "매출 현황". So I need to keep the sidebar menu as "매출 현황" with its sub-items.
+
+Also, the raw_text has "상품 구매 관리" and "상품 보내기 관리" as separate menus, so I should list both.
+
+Now, check if there's any other info in the raw_text that should be included. The task says to not add new info, so only what's in raw_text.
+
+The section_text is about the main features, header, sidebar. The raw_text has more details, but the section_text is supposed to be a concise manual. So the improved section_text should have the main features with sub-bullets, header description, and sidebar with sub-items.
+
+Wait, the original section_text is a list of bullet points. The improved version should have the same structure but with more details from raw_text.
+
+Wait, the user provided an example of the output format. Let's look at the example in the instructions. The output should be the section_text restructured with the raw_text details.
+
+So the improved section_text should start with the title, then the main features as bullet points with sub-items, then header, then sidebar.
+
+Wait, the input section_text starts with:
+
+- ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+- 주요 기능: ... 
+- 상단 헤더: ...
+- 좌측 사이드바: ...
+
+So the improved version should have these as sections, but expanded with the raw_text details.
+
+Let me structure it:
+
+- ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+- 주요 기능:
+  - 회원 관리: 가입, 등록, 출석, 상태 추적
+  - 강사 관리: 일정, 연차, 수당 관리
+  - 매출 및 결제 관리
+  - 락커(사물함) 관리
+  - 그룹수업(GX) 및 개인레슨(PT) 관리
+  - 상품(종목) 구매 및 판매
+  - 권한 및 사용자 관리
+- 상단 헤더: 좌측에 ARGOS SpoQ 로고, 우측에 회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴
+- 좌측 사이드바: 9개 주요 메뉴
+  - 권한설정: 권한관리, 권한부여관리
+  - 정보: 대시보드(통합정보), 체크인(입장)
+  - 센터관리: 공지사항, 락커, 그룹수업, 상품 관리
+  - 고객관리: 회원조회, 출석(현황/기록), 휴회, 양도 현황
+  - 강사관리: 강사정보, 연차, 수당, PT/GX 현황
+  - 상품 구매 관리: 구매, 판매, 결제, 미수금
+  - 상품 보내기 관리: 각종 보내기 기능
+  - 매출 현황: 전체/환불/PT 매출
+  - 변경내역보기: 각종 변경 내역
+
+Wait, but the raw_text's section 2 lists the sidebar menus with the sub-items. So this should be accurate.
+
+Now, check for duplicates. For example, "락커" appears in main features and in center management. But that's okay as it's part of different sections.
+
+Also, the user said to remove duplicate bullets. In the raw_text, the main features list "락커(사물함) 관리", and the sidebar has "센터관리" with "락커" as a sub-item. So it's okay.
+
+Now, check if any of the sub-items are not in the raw_text. For example, "대시보드(통합정보)" comes from raw_text section 2: "정보 - 통합정보(대시보드), 체크인(입장)".
+
+Yes, so "정보" menu has sub-items "대시보드(통합정보)" and "체크인(입장)".
+
+Similarly, "센터관리" has "공지사항, 락커, 그룹수업, 상품 관리" from raw_text.
+
+I need to make sure all these sub-items are correctly pulled from raw_text.
+
+Another point: the raw_text's section 5 has "출석(현황/기록)" under 고객관리, which is part of the sidebar menu. So the customer management menu should list "출석(현황/기록)" as a sub-item.
+
+Now, check if the sidebar list in section_text is accurate. The raw_text lists 9 menus, so the improved section_text should have exactly those 9.
+
+Wait, the section_text says "9개 주요 메뉴 제공", and the raw_text lists 9, so the improved version should list all 9 with their sub-items.
+
+Also, the user said not to add new info, so I shouldn't include anything from later sections like "권한설정 메뉴" details. The section_text is just about the main menu structure, not how to use them.
+
+So, the main task is to list the main features with their sub-items, header, and sidebar with sub-items.
+
+Now, check if there's any missing info. For example, in the main features, the raw_text says "상품(종목) 구매 및 판매", so I'll keep that.
+
+Also, the raw_text mentions "현재 버전: 1.0" in section 1, but the section_text starts with "v1.0", so maybe include that in the title.
+
+Wait, the section_text starts with "- ARGOS SpoQ: ... (v1.0)", so the version is already there.
+
+Now, check the output format. The user says to output only the improved section_text in plain text, with sections starting with "## ", but the example input uses dashes. Wait, the output format says:
+
+"## " for section start, "### " for item titles, and "-" bullets.
+
+Wait, the user says:
+
+[출력 형식(반드시 유지)]
+- 오직 개선된 section_text 전체를 plain text로만 출력하세요.
+- 섹션 시작: "## "
+- 항목 제목: "### "
+- 본문: "-" bullet
+
+Wait, so the structure should be:
+
+## ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+## 주요 기능
+### 회원 관리
+- 가입, 등록, 출석, 상태 추적
+### 강사 관리
+- 일정, 연차, 수당 관리
+... and so on.
+
+Wait, but the original section_text is a list of bullet points. The improved version should have headings for each main section.
+
+Wait, the input section_text is a list of bullet points, but the output should have structured headings.
+
+Looking at the user's example in the problem statement, the section_text is written as a list. But the output format specifies using "## " for sections and "### " for item titles.
+
+So the improved section_text should have:
+
+## ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+## 주요 기능
+### 회원 관리
+- 가입, 등록, 출석, 상태 추적
+### 강사 관리
+- 일정, 연차, 수당 관리
+... etc.
+
+But the user's example input section_text doesn't have these headings. However, the output format requires it.
+
+Wait, the user says "section_text" is the input, and we need to restructure it. The section_text is a list, but the output should be structured with the specified headings.
+
+So the improved section_text should start with the title as a section, then main features as a section, then header, then sidebar.
+
+Wait, the section_text input is:
+
+- ARGOS SpoQ: ... (v1.0)
+- 주요 기능: ...
+- 상단 헤더: ...
+- 좌측 사이드바: ...
+
+But the output should use "## " for sections. So the title becomes "## ARGOS SpoQ: ...", then "## 주요 기능", then under that, the sub-items with "### ".
+
+Wait, the user's output format says:
+
+- 섹션 시작: "## "
+- 항목 제목: "### "
+
+So the main sections (like "주요 기능") are "##", and the sub-items (like "회원 관리") are "###".
+
+So the structure would be:
+
+## ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+## 주요 기능
+### 회원 관리
+- 가입, 등록, 출석, 상태 추적
+### 강사 관리
+- 일정, 연차, 수당 관리
+... etc.
+
+Then, "## 상단 헤더" and "## 좌측 사이드바" as sections.
+
+Wait, the input section_text has four bullet points. So the improved version should have four main sections: title, main features, header, sidebar.
+
+So:
+
+## ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+## 주요 기능
+### 회원 관리
+- 가입, 등록, 출석, 상태 추적
+### 강사 관리
+- 일정, 연차, 수당 관리
+### 매출 및 결제 관리
+### 락커(사물함) 관리
+### 그룹수업(GX) 및 개인레슨(PT) 관리
+### 상품(종목) 구매 및 판매
+### 권한 및 사용자 관리
+## 상단 헤더
+### 구성
+- 좌측: ARGOS SpoQ 로고
+- 우측: 회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴
+## 좌측 사이드바
+### 주요 메뉴
+- 권한설정: 권한관리, 권한부여관리
+- 정보: 대시보드(통합정보), 체크인(입장)
+- 센터관리: 공지사항, 락커, 그룹수업, 상품 관리
+- 고객관리: 회원조회, 출석(현황/기록), 휴회, 양도 현황
+- 강사관리: 강사정보, 연차, 수당, PT/GX 현황
+- 상품 구매 관리: 구매, 판매, 결제, 미수금
+- 상품 보내기 관리: 각종 보내기 기능
+- 매출 현황: 전체/환불/PT 매출
+- 변경내역보기: 각종 변경 내역
+
+Wait, but the sidebar has 9 menus, so each menu is a bullet under "### 주요 메뉴".
+
+Now, check if all the sub-items are correctly pulled from raw_text.
+
+For example, "정보" menu's sub-items are "대시보드(통합정보), 체크인(입장)" from raw_text section 2.
+
+Yes.
+
+"센터관리" has "공지사항, 락커, 그룹수업, 상품 관리" from raw_text.
+
+"고객관리" has "회원조회, 출석(현황/기록), 휴회, 양도 현황" from raw_text section 5.
+
+"강사관리" has "강사정보, 연차, 수당, PT/GX 현황" from raw_text section 4.
+
+"상품 구매 관리" has "구매, 판매, 결제, 미수금" from raw_text section 2.
+
+"상품 보내기 관리" has "각종 보내기 기능" from raw_text.
+
+"매출 현황" has "전체/환불/PT 매출" from raw_text.
+
+"변경내역보기" has "각종 변경 내역" from raw_text.
+
+All these are directly from the raw_text, so no new info.
+
+Check for duplicates. For example, "락커" appears in main features and in center management, but that's okay as it's part of different sections.
+
+Also, check that no new info is added. For example, the raw_text doesn't mention anything about locker sizes (like 40x40x40cm) in the main features, so that's from section 4, which shouldn't be included here. The main features should only list the categories, not the details.
+
+So the main features should be the categories listed in section 1, which are the ones we've included.
+
+Now, check the output format. The user says to output only the improved section_text. So no extra text, just the text.
+
+Also, the user said to remove duplicate bullets. In the raw_text, some bullet points might be repeated, but in this case, we're pulling from different sections, so no duplicates.
+
+Another check: the raw_text has "상품(종목) 구매 및 판매" under main features, so we have that as a main feature.
+
+Also, "권한 및 사용자 관리" is listed, which matches the raw_text.
+
+Now, check if any items need to be split. The user says if a bullet is too long, split into two. But in this case, the main features are concise, so no need.
+
+Also, the user mentioned not to include any personal info. The raw_text doesn't have any, so it's safe.
+
+Now, check for any "[확인 필요]" tags. The raw_text doesn't have any missing info that needs to be flagged, so no need for those.
+
+Finally, check that the output uses the correct section headers.
+
+So the final output should be:
+
+## ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+## 주요 기능
+### 회원 관리
+- 가입, 등록, 출석, 상태 추적
+### 강사 관리
+- 일정, 연차, 수당 관리
+### 매출 및 결제 관리
+### 락커(사물함) 관리
+### 그룹수업(GX) 및 개인레슨(PT) 관리
+### 상품(종목) 구매 및 판매
+### 권한 및 사용자 관리
+## 상단 헤더
+### 구성
+- 좌측: ARGOS SpoQ 로고
+- 우측: 회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴
+## 좌측 사이드바
+### 주요 메뉴
+- 권한설정: 권한관리, 권한부여관리
+- 정보: 대시보드(통합정보), 체크인(입장)
+- 센터관리: 공지사항, 락커, 그룹수업, 상품 관리
+- 고객관리: 회원조회, 출석(현황/기록), 휴회, 양도 현황
+- 강사관리: 강사정보, 연차, 수당, PT/GX 현황
+- 상품 구매 관리: 구매, 판매, 결제, 미수금
+- 상품 보내기 관리: 각종 보내기 기능
+- 매출 현황: 전체/환불/PT 매출
+- 변경내역보기: 각종 변경 내역
+
+Wait, but the original section_text's "주요 기능" includes "회원, 강사, 매출, 락커, GX/PT, 상품 및 권한 관리", which corresponds to the seven items above. So the main features section has seven items, each as a ###.
+
+The sidebar has nine menus, listed as bullet points under "### 주요 메뉴".
+
+I think this covers everything from the raw_text without adding new info.
+
+Let me double-check the raw_text for any missing items.
+
+In section 1, main features: listed as above.
+
+Section 2, header: correct.
+
+Section 2, sidebar: the nine menus listed.
+
+Yes, this matches.
+
+So this should be the correct output.
+</think>
+
+## ARGOS SpoQ: 헬스장 및 피트니스 센터 종합 관리 시스템 (v1.0)
+## 주요 기능
+### 회원 관리
+- 가입, 등록, 출석, 상태 추적
+### 강사 관리
+- 일정, 연차, 수당 관리
+### 매출 및 결제 관리
+### 락커(사물함) 관리
+### 그룹수업(GX) 및 개인레슨(PT) 관리
+### 상품(종목) 구매 및 판매
+### 권한 및 사용자 관리
+## 상단 헤더
+### 구성
+- 좌측: ARGOS SpoQ 로고
+- 우측: 회원 검색바, 회원등록 버튼, 사용자 프로필 메뉴
+## 좌측 사이드바
+### 주요 메뉴
+- 권한설정: 권한관리, 권한부여관리
+- 정보: 대시보드(통합정보), 체크인(입장)
+- 센터관리: 공지사항, 락커, 그룹수업, 상품 관리
+- 고객관리: 회원조회, 출석(현황/기록), 휴회, 양도 현황
+- 강사관리: 강사정보, 연차, 수당, PT/GX 현황
+- 상품 구매 관리: 구매, 판매, 결제, 미수금
+- 상품 보내기 관리: 각종 보내기 기능
+- 매출 현황: 전체/환불/PT 매출
+- 변경내역보기: 각종 변경 내역
