@@ -279,7 +279,7 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
     print(f"[VISION_LLM] START model={model} image_size={len(image_base64)} prompt={prompt[:50]}...")
     t0 = _time.time()
     try:
-        resp = _req.post(url, json=payload, timeout=180)
+        resp = _req.post(url, json=payload, timeout=300)
         elapsed = _time.time() - t0
         resp.raise_for_status()
         result = resp.json().get("message", {}).get("content", "")
@@ -287,7 +287,7 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         return result
     except _req.Timeout:
         elapsed = _time.time() - t0
-        print(f"[VISION_LLM] TIMEOUT {elapsed:.1f}s (limit=180s)")
+        print(f"[VISION_LLM] TIMEOUT {elapsed:.1f}s (limit=300s)")
         raise
     except _req.ConnectionError as e:
         elapsed = _time.time() - t0

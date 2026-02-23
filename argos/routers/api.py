@@ -424,20 +424,21 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 print(f"[EXTRACT] PDF resume from page {start_page + 1}/{total_pages} for {doc_id}")
 
             def _is_garbled(text: str) -> bool:
-                """텍스트가 깨졌는지 판별. 한글이 기대되는 문서에서 한글 비율이 극히 낮으면 깨진 것."""
+                """텍스트가 깨졌는지 판별."""
                 import re
                 if not text or len(text) < 10:
                     return False
-                # 공백/줄바꿈 제거 후 실질 문자만 판별
                 content = re.sub(r'\s+', '', text)
                 if not content:
                     return False
                 korean = len(re.findall(r'[가-힣]', content))
                 alpha_num = len(re.findall(r'[a-zA-Z0-9]', content))
+                # 한글 0자 + 내용 50자 이상 → 깨진 것 (한글 문서인데 한글이 없음)
+                if korean == 0 and len(content) > 50:
+                    return True
                 readable = korean + alpha_num
                 ratio = readable / len(content)
-                # 한글+영숫자가 40% 미만이면 깨진 텍스트
-                return ratio < 0.4
+                return ratio < 0.3
 
             # Phase 1: 텍스트 추출 + 렌더링 대상 결정 (순차, 빠름)
             page_texts = {}       # {page_num: text}
@@ -462,33 +463,34 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
                 # 이미지 포함 페이지 또는 텍스트 깨진 페이지 → 렌더링
                 if page_num in remaining_image_pages or page_num in garbled_pages:
-                    pix = page.get_pixmap(dpi=150)
+                    render_dpi = 100 if page_num in garbled_pages else 150  # OCR은 낮은 DPI로 충분
+                    pix = page.get_pixmap(dpi=render_dpi)
                     image_renders[page_num] = base64.b64encode(pix.tobytes("png")).decode()
-                    print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height}")
+                    print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} dpi={render_dpi}")
 
             _extract_progress[doc_id]["images_total"] = len(image_renders)
 
             pdf_doc.close()
             print(f"[EXTRACT] Phase1 done: {len(page_texts)} text pages, {len(garbled_pages)} garbled, {len(image_renders)} vision targets")
 
-            # Phase 2: Vision LLM 순차 호출 (Ollama 대형 모델은 동시처리 불가)
+            # Phase 2: Vision LLM 병렬 호출 (2 workers — Ollama 큐 대기 고려)
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             import time as _extract_time
+            import threading
             image_descs = {}  # {page_num: desc}
             vision_total = len(image_renders)
+            _vision_lock = threading.Lock()
 
             if image_renders:
-                print(f"[EXTRACT] Phase2 Vision LLM: {vision_total} pages sequential for {doc_id}")
-                for vi, (pg_num, img_b64) in enumerate(sorted(image_renders.items())):
+                VISION_WORKERS = min(2, vision_total)
+                print(f"[EXTRACT] Phase2 Vision LLM: {vision_total} pages, {VISION_WORKERS} workers for {doc_id}")
+
+                def _vision_task(pg_num, img_b64):
                     if _is_extract_cancelled(doc_id):
-                        print(f"[EXTRACT] Cancelled at vision {vi + 1}/{vision_total}")
-                        break
-                    # 텍스트 깨진 페이지는 OCR 프롬프트, 이미지 포함 페이지는 설명 프롬프트
+                        return pg_num, "[건너뜀: 취소됨]"
                     is_garbled = pg_num in garbled_pages
                     prompt = VISION_OCR_PROMPT if is_garbled else VISION_PROMPT
                     label = "OCR" if is_garbled else "이미지 설명"
-                    _extract_progress[doc_id]["status"] = f"페이지 {pg_num + 1} {label} 중 ({vi + 1}/{vision_total})"
-                    _extract_progress[doc_id]["images_done"] = vi
-
                     t0 = _extract_time.time()
                     try:
                         desc = call_vision_llm(prompt, img_b64)
@@ -503,14 +505,20 @@ def extract_text(doc_id: str, resume_page: int = 0):
                         elapsed = _extract_time.time() - t0
                         print(f"[EXTRACT] page {pg_num + 1} {label} FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
                         desc = f"[{label} 실패]"
+                    return pg_num, desc
 
-                    image_descs[pg_num] = desc
-                    image_count += 1
-                    _extract_progress[doc_id]["images_done"] = image_count
-                    # 해당 페이지 텍스트+이미지 합쳐서 스트리밍
-                    combined = page_texts.get(pg_num, "")
-                    combined = (combined + "\n" + desc).strip() if combined else desc
-                    _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
+                with ThreadPoolExecutor(max_workers=VISION_WORKERS) as executor:
+                    futures = {executor.submit(_vision_task, pn, b64): pn for pn, b64 in sorted(image_renders.items())}
+                    for future in as_completed(futures):
+                        pg_num, desc = future.result()
+                        with _vision_lock:
+                            image_descs[pg_num] = desc
+                            image_count += 1
+                            _extract_progress[doc_id]["images_done"] = image_count
+                            _extract_progress[doc_id]["status"] = f"Vision LLM {image_count}/{vision_total}"
+                            combined = page_texts.get(pg_num, "")
+                            combined = (combined + "\n" + desc).strip() if combined else desc
+                            _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
 
                 print(f"[EXTRACT] Phase2 done: {image_count}/{vision_total} pages processed")
 
