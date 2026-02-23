@@ -281,6 +281,7 @@ _paddle_ocr = None
 def _get_paddle_ocr():
     global _paddle_ocr
     if _paddle_ocr is None:
+        os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
         from paddleocr import PaddleOCR
         _paddle_ocr = PaddleOCR(use_angle_cls=True, lang='korean')
         print("[EXTRACT] PaddleOCR initialized (korean)")
