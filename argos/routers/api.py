@@ -274,7 +274,8 @@ def list_documents(apt_id: Optional[str] = None):
 # ============ STEP 2: EXTRACT TEXT ============
 
 VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해."
-VISION_OCR_PROMPT = "이 이미지에 있는 텍스트를 한국어로 정확히 읽어서 그대로 출력해줘. 목차라면 항목과 페이지 번호를 유지해줘. 표라면 표 구조를 유지해줘. 가능한 원본 텍스트를 그대로 보존해서 출력해."
+VISION_OCR_PROMPT = "이 이미지의 텍스트를 모두 읽어서 그대로 출력해. 빠짐없이 전부 읽어줘."
+VISION_OCR_RETRY_PROMPT = "이 이미지에 한국어 텍스트가 있습니다. 이미지에 보이는 모든 글자를 하나도 빠짐없이 읽어서 출력해주세요."
 
 # Extract progress tracker (in-memory)
 _extract_progress = {}  # {doc_id: {"page": 1, "total_pages": 10, "images_done": 2, "images_total": 5, "status": "..."}}
@@ -503,16 +504,29 @@ def extract_text(doc_id: str, resume_page: int = 0):
                         elapsed = _extract_time.time() - t0
                         if desc and desc.strip():
                             desc = desc.strip()
-                            # OCR 결과 디버그 로그 (첫 200자)
                             ocr_preview = desc[:200].replace('\n', ' ')
                             print(f"[EXTRACT] page {pg_num + 1} {label} raw_preview: {ocr_preview}")
-                            # OCR 결과 품질 검증 — 여전히 깨진 텍스트면 실패 처리
+                            # OCR 결과 품질 검증
                             if is_ocr and _is_garbled(desc, log_page=pg_num):
-                                print(f"[EXTRACT] page {pg_num + 1} OCR result still garbled, marking as failed")
-                                desc = f"[OCR 실패: 텍스트 인식 불가 (페이지 {pg_num + 1})]"
+                                # 1차 실패 → 다른 프롬프트로 재시도
+                                print(f"[EXTRACT] page {pg_num + 1} OCR garbled, retrying with alt prompt...")
+                                if not _is_extract_cancelled(doc_id):
+                                    desc2 = call_vision_llm(VISION_OCR_RETRY_PROMPT, img_b64)
+                                    if desc2 and desc2.strip():
+                                        desc2 = desc2.strip()
+                                        retry_preview = desc2[:200].replace('\n', ' ')
+                                        print(f"[EXTRACT] page {pg_num + 1} OCR retry raw_preview: {retry_preview}")
+                                        if not _is_garbled(desc2, log_page=pg_num):
+                                            desc = desc2
+                                            print(f"[EXTRACT] page {pg_num + 1} OCR retry SUCCESS")
+                                        else:
+                                            print(f"[EXTRACT] page {pg_num + 1} OCR retry also garbled")
+                                            desc = f"[OCR 인식 불완전 (페이지 {pg_num + 1})]\n{desc2}"
+                                    else:
+                                        desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
                             elif not is_ocr:
                                 desc = f"[이미지 설명: {desc}]"
-                            print(f"[EXTRACT] page {pg_num + 1} {label} OK {elapsed:.1f}s len={len(desc)}")
+                            print(f"[EXTRACT] page {pg_num + 1} {label} DONE {elapsed:.1f}s len={len(desc)}")
                         else:
                             desc = f"[{label} 실패]"
                             print(f"[EXTRACT] page {pg_num + 1} {label} EMPTY {elapsed:.1f}s")

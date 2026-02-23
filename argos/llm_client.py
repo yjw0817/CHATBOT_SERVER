@@ -270,10 +270,11 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         "model": model,
         "messages": [{
             "role": "user",
-            "content": prompt + " /no_think",
+            "content": prompt,
             "images": [image_base64]
         }],
         "stream": False,
+        "think": False,
         "options": {"num_ctx": 8192}
     }
     import time as _time
