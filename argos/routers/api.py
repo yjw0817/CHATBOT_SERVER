@@ -342,25 +342,32 @@ def extract_text(doc_id: str):
             import zipfile
             import base64
 
-            _extract_progress[doc_id] = {"page": 0, "total_pages": 0, "images_done": 0, "images_total": 0, "status": "DOCX 텍스트 추출 중"}
+            _extract_progress[doc_id] = {"page": 0, "total_pages": 0, "images_done": 0, "images_total": 0, "status": "DOCX 텍스트 추출 중", "pages": {}}
 
             docx_doc = Document(str(file_path))
             parts = []
 
             # 단락
+            para_texts = []
             for p in docx_doc.paragraphs:
                 if p.text.strip():
-                    parts.append(p.text)
+                    para_texts.append(p.text)
+            if para_texts:
+                para_content = "\n".join(para_texts)
+                parts.append(para_content)
+                _extract_progress[doc_id]["pages"]["본문"] = para_content
 
             # 테이블
             _extract_progress[doc_id]["status"] = "테이블 추출 중"
-            for table in docx_doc.tables:
+            for t_idx, table in enumerate(docx_doc.tables):
                 rows_text = []
                 for row in table.rows:
                     cells = [cell.text.strip() for cell in row.cells]
                     rows_text.append(" | ".join(cells))
                 if rows_text:
-                    parts.append("[표]\n" + "\n".join(rows_text))
+                    table_content = "[표]\n" + "\n".join(rows_text)
+                    parts.append(table_content)
+                    _extract_progress[doc_id]["pages"][f"표 {t_idx + 1}"] = table_content
 
             # 이미지 수 미리 카운트
             with zipfile.ZipFile(str(file_path), 'r') as zf:
@@ -375,6 +382,7 @@ def extract_text(doc_id: str):
                     print(f"[EXTRACT] DOCX image {image_count}: {name} ({len(img_bytes)} bytes)")
                     desc = _describe_image(img_b64, doc_id)
                     parts.append(desc)
+                    _extract_progress[doc_id]["pages"][f"이미지 {image_count}"] = desc
 
             raw_text = "\n".join(parts)
             _extract_progress.pop(doc_id, None)
@@ -397,17 +405,19 @@ def extract_text(doc_id: str):
                 if pg.get_images(full=True):
                     pages_with_images.append(pg_idx)
 
-            _extract_progress[doc_id] = {"page": 0, "total_pages": total_pages, "images_done": 0, "images_total": len(pages_with_images), "status": f"0/{total_pages} 페이지"}
+            _extract_progress[doc_id] = {"page": 0, "total_pages": total_pages, "images_done": 0, "images_total": len(pages_with_images), "status": f"0/{total_pages} 페이지", "pages": {}}
             parts = []
 
             for page_num, page in enumerate(pdf_doc):
                 _extract_progress[doc_id]["page"] = page_num + 1
                 _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
 
+                page_parts = []
+
                 # 텍스트 추출
                 page_text = page.get_text().strip()
                 if page_text:
-                    parts.append(page_text)
+                    page_parts.append(page_text)
 
                 # 이미지 포함 페이지 → 페이지 전체 렌더링 후 Vision LLM
                 if page_num in pages_with_images:
@@ -419,7 +429,12 @@ def extract_text(doc_id: str):
                     img_b64 = base64.b64encode(pix.tobytes("png")).decode()
                     print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} ({len(img_b64)} b64 chars)")
                     desc = _describe_image(img_b64, doc_id)
-                    parts.append(desc)
+                    page_parts.append(desc)
+
+                if page_parts:
+                    page_content = "\n".join(page_parts)
+                    parts.append(page_content)
+                    _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_content
 
             pdf_doc.close()
             raw_text = "\n".join(parts)
