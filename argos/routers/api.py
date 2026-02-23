@@ -469,7 +469,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
                 # 이미지 포함 페이지 또는 텍스트 깨진 페이지 → 렌더링
                 if page_num in remaining_image_pages or page_num in garbled_pages:
-                    render_dpi = 150  # OCR과 이미지 설명 모두 150 DPI
+                    render_dpi = 200 if page_num in garbled_pages else 150  # OCR은 높은 DPI
                     pix = page.get_pixmap(dpi=render_dpi)
                     image_renders[page_num] = base64.b64encode(pix.tobytes("png")).decode()
                     print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} dpi={render_dpi}")
@@ -503,6 +503,9 @@ def extract_text(doc_id: str, resume_page: int = 0):
                         elapsed = _extract_time.time() - t0
                         if desc and desc.strip():
                             desc = desc.strip()
+                            # OCR 결과 디버그 로그 (첫 200자)
+                            ocr_preview = desc[:200].replace('\n', ' ')
+                            print(f"[EXTRACT] page {pg_num + 1} {label} raw_preview: {ocr_preview}")
                             # OCR 결과 품질 검증 — 여전히 깨진 텍스트면 실패 처리
                             if is_ocr and _is_garbled(desc, log_page=pg_num):
                                 print(f"[EXTRACT] page {pg_num + 1} OCR result still garbled, marking as failed")

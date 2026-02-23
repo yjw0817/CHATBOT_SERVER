@@ -270,10 +270,11 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         "model": model,
         "messages": [{
             "role": "user",
-            "content": prompt,
+            "content": prompt + " /no_think",
             "images": [image_base64]
         }],
-        "stream": False
+        "stream": False,
+        "options": {"num_ctx": 8192}
     }
     import time as _time
     print(f"[VISION_LLM] START model={model} image_size={len(image_base64)} prompt={prompt[:50]}...")
@@ -290,7 +291,8 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
             if cleaned:
                 print(f"[VISION_LLM] Stripped <think> tags: {len(result)} -> {len(cleaned)}")
                 result = cleaned
-        print(f"[VISION_LLM] OK {elapsed:.1f}s result_len={len(result)}")
+        preview = result[:150].replace('\n', ' ') if result else "(empty)"
+        print(f"[VISION_LLM] OK {elapsed:.1f}s result_len={len(result)} preview={preview}")
         return result
     except _req.Timeout:
         elapsed = _time.time() - t0
