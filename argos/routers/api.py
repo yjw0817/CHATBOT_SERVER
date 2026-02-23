@@ -864,12 +864,15 @@ def manualize(doc_id: str, force: bool = False):
         raise HTTPException(status_code=404, detail="Document not found")
 
     raw_text = doc["raw_text"]
-    if not raw_text or raw_text.strip() == "" or raw_text.startswith("["):
+    # 에러 문자열만 차단 (예: "[지원하지 않는 파일 형식: ...]")
+    # [이미지 설명: ...], [표], OCR 결과 등은 정상 콘텐츠
+    _error_prefixes = ("[지원하지 않는", "[PDF extraction", "[Unsupported")
+    if not raw_text or raw_text.strip() == "":
         conn.close()
-        error_msg = "추출된 텍스트가 없거나 유효하지 않습니다. 먼저 'Extract'를 수행해 주세요."
-        if raw_text and raw_text.startswith("["):
-            error_msg = f"텍스트 추출에 문제가 있습니다: {raw_text}"
-        raise HTTPException(status_code=400, detail=error_msg)
+        raise HTTPException(status_code=400, detail="추출된 텍스트가 없습니다. 먼저 'Extract'를 수행해 주세요.")
+    if raw_text.strip().startswith(_error_prefixes):
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"텍스트 추출에 문제가 있습니다: {raw_text[:200]}")
 
     # Check if manual sections already exist (return cached if not forced)
     if not force:
