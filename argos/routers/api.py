@@ -282,7 +282,7 @@ def _get_paddle_ocr():
     global _paddle_ocr
     if _paddle_ocr is None:
         from paddleocr import PaddleOCR
-        _paddle_ocr = PaddleOCR(use_angle_cls=True, lang='korean', show_log=False)
+        _paddle_ocr = PaddleOCR(use_angle_cls=True, lang='korean')
         print("[EXTRACT] PaddleOCR initialized (korean)")
     return _paddle_ocr
 
