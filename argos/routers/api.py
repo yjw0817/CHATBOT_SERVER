@@ -527,7 +527,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 # 렌더링 + 즉시 Vision LLM 제출
                 if needs_vision:
                     is_ocr = page_num in garbled_pages
-                    render_dpi = 200 if is_ocr else 150
+                    render_dpi = 300 if is_ocr else 150
                     pix = page.get_pixmap(dpi=render_dpi)
                     img_b64 = base64.b64encode(pix.tobytes("png")).decode()
                     print(f"[EXTRACT] PDF page {page_num + 1} render {pix.width}x{pix.height} → Vision LLM 제출")
