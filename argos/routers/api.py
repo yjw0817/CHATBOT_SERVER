@@ -293,15 +293,17 @@ def _paddle_ocr_image(img_b64: str) -> str:
     from PIL import Image
     ocr = _get_paddle_ocr()
     img_bytes = base64.b64decode(img_b64)
-    img = Image.open(io.BytesIO(img_bytes))
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")  # RGBA→RGB 변환
     img_np = np.array(img)
     result = ocr.ocr(img_np, cls=True)
     if not result or not result[0]:
         return ""
     lines = []
     for line in result[0]:
-        text = line[1][0]
-        lines.append(text)
+        if line and line[1]:
+            text = line[1][0]
+            if text and text.strip():
+                lines.append(text.strip())
     return "\n".join(lines)
 
 
