@@ -2182,7 +2182,8 @@
 
     // Close modal on outside click
     document.getElementById('result-modal').addEventListener('click', function (e) {
-        if (e.target === this) closeModal();
+        // 추출/매뉴얼라이즈 진행 중이면 배경 클릭으로 닫지 않음
+        if (e.target === this && !document.getElementById('extract-header')?.querySelector('.spinner') && !document.getElementById('manualize-status')?.offsetParent) closeModal();
     });
 </script>
 
