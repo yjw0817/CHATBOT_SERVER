@@ -2039,10 +2039,15 @@
                     if (p.images_total > 0) detail += ` · 이미지 ${p.images_done}/${p.images_total}`;
                     progressEl.textContent = detail;
                 }
-                // Stream pages as they arrive
+                // Stream pages as they arrive (페이지 번호순 정렬)
                 if (p.pages && pagesEl) {
-                    for (const [pageKey, content] of Object.entries(p.pages)) {
+                    const sortedKeys = Object.keys(p.pages).sort((a, b) => {
+                        const na = parseInt(a) || 0, nb = parseInt(b) || 0;
+                        return na - nb || a.localeCompare(b);
+                    });
+                    for (const pageKey of sortedKeys) {
                         if (renderedPages.has(pageKey)) continue;
+                        const content = p.pages[pageKey];
                         renderedPages.add(pageKey);
                         const card = document.createElement('div');
                         card.style.cssText = 'background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;';
@@ -2060,7 +2065,19 @@
                             const pre = card.querySelector('.page-preview');
                             btn.onclick = () => { expanded = !expanded; pre.textContent = expanded ? content : content.substring(0, 300) + '...'; pre.style.maxHeight = expanded ? 'none' : '150px'; btn.textContent = expanded ? '접기' : '펼치기'; };
                         }
-                        pagesEl.appendChild(card);
+                        // 번호순 위치에 삽입
+                        card.dataset.pageKey = pageKey;
+                        const pageNum = parseInt(pageKey) || 0;
+                        let inserted = false;
+                        for (const existing of pagesEl.children) {
+                            const existNum = parseInt(existing.dataset.pageKey) || 0;
+                            if (pageNum < existNum) {
+                                pagesEl.insertBefore(card, existing);
+                                inserted = true;
+                                break;
+                            }
+                        }
+                        if (!inserted) pagesEl.appendChild(card);
                         pagesEl.scrollTop = pagesEl.scrollHeight;
                     }
                 }
