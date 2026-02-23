@@ -458,6 +458,23 @@ def extract_text(doc_id: str, resume_page: int = 0):
             _vision_lock = threading.Lock()
             vision_futures = []
             vision_submitted = 0
+            _vision_done = threading.Event()
+
+            def _on_vision_done(future):
+                """콜백: Vision LLM 완료 즉시 결과 반영 (스캔 중에도)."""
+                nonlocal image_count
+                try:
+                    pg_num, desc = future.result()
+                    with _vision_lock:
+                        image_descs[pg_num] = desc
+                        image_count += 1
+                        _extract_progress[doc_id]["images_done"] = image_count
+                        _extract_progress[doc_id]["status"] = f"Vision LLM {image_count}/{vision_submitted}"
+                        combined = page_texts.get(pg_num, "")
+                        combined = (combined + "\n" + desc).strip() if combined else desc
+                        _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
+                except Exception as e:
+                    print(f"[EXTRACT] vision callback error: {e}")
 
             def _vision_task(pg_num, img_b64, is_ocr):
                 if _is_extract_cancelled(doc_id):
@@ -472,7 +489,6 @@ def extract_text(doc_id: str, resume_page: int = 0):
                         desc = desc.strip()
                         ocr_preview = desc[:200].replace('\n', ' ')
                         print(f"[EXTRACT] page {pg_num + 1} {label} raw_preview: {ocr_preview}")
-                        # OCR 결과 품질 검증
                         if is_ocr and _is_garbled(desc, log_page=pg_num):
                             print(f"[EXTRACT] page {pg_num + 1} OCR garbled, retrying...")
                             if not _is_extract_cancelled(doc_id):
@@ -500,13 +516,15 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
             executor = ThreadPoolExecutor(max_workers=2)
 
+            # 스캔 + Vision LLM 동시 진행 (콜백으로 결과 즉시 반영)
             for page_num, page in enumerate(pdf_doc):
                 if page_num < start_page:
                     continue
                 if _is_extract_cancelled(doc_id):
                     break
                 _extract_progress[doc_id]["page"] = page_num + 1
-                _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 분석"
+                vs = f" · Vision {image_count}/{vision_submitted}" if vision_submitted else ""
+                _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 분석{vs}"
 
                 page_text = page.get_text().strip()
                 needs_vision = False
@@ -516,7 +534,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     if page_num not in pages_with_images:
                         _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_text
                     else:
-                        needs_vision = True  # 텍스트 OK + 이미지 있음
+                        needs_vision = True
                 elif page_text:
                     garbled_pages.add(page_num)
                     needs_vision = True
@@ -524,35 +542,26 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 elif page_num in remaining_image_pages:
                     needs_vision = True
 
-                # 렌더링 + 즉시 Vision LLM 제출
                 if needs_vision:
                     is_ocr = page_num in garbled_pages
                     render_dpi = 300 if is_ocr else 150
                     pix = page.get_pixmap(dpi=render_dpi)
                     img_b64 = base64.b64encode(pix.tobytes("png")).decode()
-                    print(f"[EXTRACT] PDF page {page_num + 1} render {pix.width}x{pix.height} → Vision LLM 제출")
+                    print(f"[EXTRACT] PDF page {page_num + 1} render {pix.width}x{pix.height} → Vision LLM")
                     future = executor.submit(_vision_task, page_num, img_b64, is_ocr)
+                    future.add_done_callback(_on_vision_done)
                     vision_futures.append(future)
                     vision_submitted += 1
                     _extract_progress[doc_id]["images_total"] = vision_submitted
 
             pdf_doc.close()
-            print(f"[EXTRACT] Scan done: {len(page_texts)} text, {len(garbled_pages)} garbled, {vision_submitted} vision submitted")
+            print(f"[EXTRACT] Scan done: {len(page_texts)} text, {len(garbled_pages)} garbled, {vision_submitted} vision")
 
-            # Vision LLM 결과 수집 (이미 병렬 진행 중)
-            for future in as_completed(vision_futures):
-                pg_num, desc = future.result()
-                with _vision_lock:
-                    image_descs[pg_num] = desc
-                    image_count += 1
-                    _extract_progress[doc_id]["images_done"] = image_count
-                    _extract_progress[doc_id]["status"] = f"Vision LLM {image_count}/{vision_submitted}"
-                    combined = page_texts.get(pg_num, "")
-                    combined = (combined + "\n" + desc).strip() if combined else desc
-                    _extract_progress[doc_id]["pages"][str(pg_num + 1)] = combined
-
+            # 아직 완료 안 된 Vision LLM 작업 대기
+            for future in vision_futures:
+                future.result()  # 콜백이 이미 결과 처리, 여기선 완료 대기만
             executor.shutdown(wait=False)
-            print(f"[EXTRACT] Vision done: {image_count}/{vision_submitted} pages processed")
+            print(f"[EXTRACT] Vision done: {image_count}/{vision_submitted}")
 
             # Phase 3: 페이지 순서대로 조합
             parts = []
