@@ -423,8 +423,8 @@ def extract_text(doc_id: str, resume_page: int = 0):
             if start_page > 0:
                 print(f"[EXTRACT] PDF resume from page {start_page + 1}/{total_pages} for {doc_id}")
 
-            def _is_garbled(text: str) -> bool:
-                """텍스트가 깨졌는지 판별."""
+            def _is_garbled(text: str, log_page: int = -1) -> bool:
+                """텍스트가 깨졌는지 판별. log_page>=0이면 디버그 로그 출력."""
                 import re
                 if not text or len(text) < 10:
                     return False
@@ -433,12 +433,18 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     return False
                 korean = len(re.findall(r'[가-힣]', content))
                 alpha_num = len(re.findall(r'[a-zA-Z0-9]', content))
-                # 한글 0자 + 내용 50자 이상 → 깨진 것 (한글 문서인데 한글이 없음)
-                if korean == 0 and len(content) > 50:
-                    return True
                 readable = korean + alpha_num
-                ratio = readable / len(content)
-                return ratio < 0.3
+                ratio = readable / len(content) if content else 0
+                # 한글 0자 + 내용 20자 이상 → 깨진 것 (한글 문서인데 한글이 없음)
+                garbled = False
+                if korean == 0 and len(content) > 20:
+                    garbled = True
+                elif ratio < 0.3:
+                    garbled = True
+                if log_page >= 0:
+                    preview = content[:60]
+                    print(f"[GARBLED_CHECK] page={log_page + 1} len={len(content)} korean={korean} alpha={alpha_num} ratio={ratio:.2f} → {'GARBLED' if garbled else 'OK'} preview={preview}")
+                return garbled
 
             # Phase 1: 텍스트 추출 + 렌더링 대상 결정 (순차, 빠름)
             page_texts = {}       # {page_num: text}
@@ -451,7 +457,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
 
                 page_text = page.get_text().strip()
-                if page_text and not _is_garbled(page_text):
+                if page_text and not _is_garbled(page_text, log_page=page_num):
                     page_texts[page_num] = page_text
                     # 텍스트 정상 + 이미지 없는 페이지는 바로 스트리밍
                     if page_num not in pages_with_images:
@@ -463,7 +469,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
                 # 이미지 포함 페이지 또는 텍스트 깨진 페이지 → 렌더링
                 if page_num in remaining_image_pages or page_num in garbled_pages:
-                    render_dpi = 100 if page_num in garbled_pages else 150  # OCR은 낮은 DPI로 충분
+                    render_dpi = 150  # OCR과 이미지 설명 모두 150 DPI
                     pix = page.get_pixmap(dpi=render_dpi)
                     image_renders[page_num] = base64.b64encode(pix.tobytes("png")).decode()
                     print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height} dpi={render_dpi}")
@@ -488,15 +494,21 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 def _vision_task(pg_num, img_b64):
                     if _is_extract_cancelled(doc_id):
                         return pg_num, "[건너뜀: 취소됨]"
-                    is_garbled = pg_num in garbled_pages
-                    prompt = VISION_OCR_PROMPT if is_garbled else VISION_PROMPT
-                    label = "OCR" if is_garbled else "이미지 설명"
+                    is_ocr = pg_num in garbled_pages
+                    prompt = VISION_OCR_PROMPT if is_ocr else VISION_PROMPT
+                    label = "OCR" if is_ocr else "이미지 설명"
                     t0 = _extract_time.time()
                     try:
                         desc = call_vision_llm(prompt, img_b64)
                         elapsed = _extract_time.time() - t0
                         if desc and desc.strip():
-                            desc = desc.strip() if is_garbled else f"[이미지 설명: {desc.strip()}]"
+                            desc = desc.strip()
+                            # OCR 결과 품질 검증 — 여전히 깨진 텍스트면 실패 처리
+                            if is_ocr and _is_garbled(desc, log_page=pg_num):
+                                print(f"[EXTRACT] page {pg_num + 1} OCR result still garbled, marking as failed")
+                                desc = f"[OCR 실패: 텍스트 인식 불가 (페이지 {pg_num + 1})]"
+                            elif not is_ocr:
+                                desc = f"[이미지 설명: {desc}]"
                             print(f"[EXTRACT] page {pg_num + 1} {label} OK {elapsed:.1f}s len={len(desc)}")
                         else:
                             desc = f"[{label} 실패]"

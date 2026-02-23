@@ -283,6 +283,13 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         elapsed = _time.time() - t0
         resp.raise_for_status()
         result = resp.json().get("message", {}).get("content", "")
+        # Strip <think>...</think> tags (qwen3 모델 thinking output 제거)
+        if result and "<think>" in result:
+            import re as _re
+            cleaned = _re.sub(r'<think>.*?</think>', '', result, flags=_re.DOTALL).strip()
+            if cleaned:
+                print(f"[VISION_LLM] Stripped <think> tags: {len(result)} -> {len(cleaned)}")
+                result = cleaned
         print(f"[VISION_LLM] OK {elapsed:.1f}s result_len={len(result)}")
         return result
     except _req.Timeout:
