@@ -274,6 +274,7 @@ def list_documents(apt_id: Optional[str] = None):
 # ============ STEP 2: EXTRACT TEXT ============
 
 VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해."
+VISION_OCR_PROMPT = "이 이미지에 있는 텍스트를 한국어로 정확히 읽어서 그대로 출력해줘. 목차라면 항목과 페이지 번호를 유지해줘. 표라면 표 구조를 유지해줘. 가능한 원본 텍스트를 그대로 보존해서 출력해."
 
 # Extract progress tracker (in-memory)
 _extract_progress = {}  # {doc_id: {"page": 1, "total_pages": 10, "images_done": 2, "images_total": 5, "status": "..."}}
@@ -422,9 +423,19 @@ def extract_text(doc_id: str, resume_page: int = 0):
             if start_page > 0:
                 print(f"[EXTRACT] PDF resume from page {start_page + 1}/{total_pages} for {doc_id}")
 
-            # Phase 1: 텍스트 추출 + 이미지 페이지 렌더링 (순차, 빠름)
+            def _is_garbled(text: str) -> bool:
+                """텍스트가 깨졌는지 판별. 한글/영문/숫자/일반문장부호 비율이 낮으면 깨진 것."""
+                import re
+                if not text or len(text) < 5:
+                    return False
+                normal = len(re.findall(r'[가-힣a-zA-Z0-9\s.,!?;:\'\"()\-/\n]', text))
+                ratio = normal / len(text)
+                return ratio < 0.5
+
+            # Phase 1: 텍스트 추출 + 렌더링 대상 결정 (순차, 빠름)
             page_texts = {}       # {page_num: text}
             image_renders = {}    # {page_num: img_b64}
+            garbled_pages = set()
             for page_num, page in enumerate(pdf_doc):
                 if page_num < start_page:
                     continue
@@ -432,16 +443,23 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 _extract_progress[doc_id]["status"] = f"{page_num + 1}/{total_pages} 페이지 텍스트 추출"
 
                 page_text = page.get_text().strip()
-                if page_text:
+                if page_text and not _is_garbled(page_text):
                     page_texts[page_num] = page_text
-                    # 텍스트만 있는 페이지는 바로 스트리밍
+                    # 텍스트 정상 + 이미지 없는 페이지는 바로 스트리밍
                     if page_num not in pages_with_images:
                         _extract_progress[doc_id]["pages"][str(page_num + 1)] = page_text
+                elif page_text:
+                    # 텍스트 깨짐 → Vision LLM으로 대체
+                    garbled_pages.add(page_num)
+                    print(f"[EXTRACT] PDF page {page_num + 1}: garbled text detected, will use Vision LLM")
 
-                if page_num in remaining_image_pages:
+                # 이미지 포함 페이지 또는 텍스트 깨진 페이지 → 렌더링
+                if page_num in remaining_image_pages or page_num in garbled_pages:
                     pix = page.get_pixmap(dpi=150)
                     image_renders[page_num] = base64.b64encode(pix.tobytes("png")).decode()
                     print(f"[EXTRACT] PDF page {page_num + 1} render: {pix.width}x{pix.height}")
+
+            _extract_progress[doc_id]["images_total"] = len(image_renders)
 
             pdf_doc.close()
 
@@ -457,12 +475,17 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 def _vision_task(pg_num, img_b64):
                     if _is_extract_cancelled(doc_id):
                         return pg_num, "[이미지 설명 건너뜀: 취소됨]"
+                    # 텍스트 깨진 페이지는 OCR 프롬프트, 이미지 포함 페이지는 설명 프롬프트
+                    prompt = VISION_OCR_PROMPT if pg_num in garbled_pages else VISION_PROMPT
+                    label = "OCR" if pg_num in garbled_pages else "이미지 설명"
                     try:
-                        desc = call_vision_llm(VISION_PROMPT, img_b64)
-                        return pg_num, f"[이미지 설명: {desc.strip()}]" if desc and desc.strip() else (pg_num, "[이미지 설명 실패]")
+                        desc = call_vision_llm(prompt, img_b64)
+                        if desc and desc.strip():
+                            return pg_num, desc.strip() if pg_num in garbled_pages else f"[이미지 설명: {desc.strip()}]"
+                        return pg_num, f"[{label} 실패]"
                     except Exception as e:
                         print(f"[EXTRACT] Vision LLM failed page {pg_num + 1}: {e}")
-                        return pg_num, "[이미지 설명 실패]"
+                        return pg_num, f"[{label} 실패]"
 
                 with ThreadPoolExecutor(max_workers=VISION_WORKERS) as executor:
                     futures = {executor.submit(_vision_task, pn, b64): pn for pn, b64 in image_renders.items()}
@@ -488,8 +511,6 @@ def extract_text(doc_id: str, resume_page: int = 0):
                     page_parts.append(image_descs[pg_num])
                 if page_parts:
                     parts.append("\n".join(page_parts))
-
-            pdf_doc.close()
             raw_text = "\n".join(parts)
             if _is_extract_cancelled(doc_id):
                 # 취소 시: progress 유지 (이어하기용), pages만 제거 (메모리 절약)
