@@ -274,8 +274,36 @@ def list_documents(apt_id: Optional[str] = None):
 # ============ STEP 2: EXTRACT TEXT ============
 
 VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해."
-VISION_OCR_PROMPT = "이 이미지의 텍스트를 모두 읽어서 그대로 출력해. 빠짐없이 전부 읽어줘."
-VISION_OCR_RETRY_PROMPT = "이 이미지에 한국어 텍스트가 있습니다. 이미지에 보이는 모든 글자를 하나도 빠짐없이 읽어서 출력해주세요."
+
+# PaddleOCR 싱글톤 (한국어 OCR)
+_paddle_ocr = None
+
+def _get_paddle_ocr():
+    global _paddle_ocr
+    if _paddle_ocr is None:
+        from paddleocr import PaddleOCR
+        _paddle_ocr = PaddleOCR(use_angle_cls=True, lang='korean', show_log=False)
+        print("[EXTRACT] PaddleOCR initialized (korean)")
+    return _paddle_ocr
+
+
+def _paddle_ocr_image(img_b64: str) -> str:
+    """PaddleOCR로 base64 이미지에서 텍스트 추출."""
+    import io
+    from PIL import Image
+    ocr = _get_paddle_ocr()
+    img_bytes = base64.b64decode(img_b64)
+    img = Image.open(io.BytesIO(img_bytes))
+    img_np = np.array(img)
+    result = ocr.ocr(img_np, cls=True)
+    if not result or not result[0]:
+        return ""
+    lines = []
+    for line in result[0]:
+        text = line[1][0]
+        lines.append(text)
+    return "\n".join(lines)
+
 
 # Extract progress tracker (in-memory)
 _extract_progress = {}  # {doc_id: {"page": 1, "total_pages": 10, "images_done": 2, "images_total": 5, "status": "..."}}
@@ -407,7 +435,8 @@ def extract_text(doc_id: str, resume_page: int = 0):
             import base64
             fitz.TOOLS.mupdf_display_errors(False)
 
-            pdf_doc = fitz.open(str(file_path))
+            pdf_path_str = str(file_path)
+            pdf_doc = fitz.open(pdf_path_str)
             total_pages = len(pdf_doc)
 
             # 이미지 포함 페이지 수 미리 카운트
@@ -461,7 +490,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
             _vision_done = threading.Event()
 
             def _on_vision_done(future):
-                """콜백: Vision LLM 완료 즉시 결과 반영 (스캔 중에도)."""
+                """콜백: OCR/Vision 완료 즉시 결과 반영 (스캔 중에도)."""
                 nonlocal image_count
                 try:
                     pg_num, desc = future.result()
@@ -476,42 +505,51 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 except Exception as e:
                     print(f"[EXTRACT] vision callback error: {e}")
 
-            def _vision_task(pg_num, img_b64, is_ocr):
+            def _vision_task(pg_num, is_ocr):
+                """워커: PDF 렌더링 + OCR/Vision 처리."""
                 if _is_extract_cancelled(doc_id):
                     return pg_num, "[건너뜀: 취소됨]"
-                prompt = VISION_OCR_PROMPT if is_ocr else VISION_PROMPT
-                label = "OCR" if is_ocr else "이미지 설명"
                 t0 = _extract_time.time()
-                try:
-                    desc = call_vision_llm(prompt, img_b64)
-                    elapsed = _extract_time.time() - t0
-                    if desc and desc.strip():
-                        desc = desc.strip()
-                        ocr_preview = desc[:200].replace('\n', ' ')
-                        print(f"[EXTRACT] page {pg_num + 1} {label} raw_preview: {ocr_preview}")
-                        if is_ocr and _is_garbled(desc, log_page=pg_num):
-                            print(f"[EXTRACT] page {pg_num + 1} OCR garbled, retrying...")
-                            if not _is_extract_cancelled(doc_id):
-                                desc2 = call_vision_llm(VISION_OCR_RETRY_PROMPT, img_b64)
-                                if desc2 and desc2.strip():
-                                    desc2 = desc2.strip()
-                                    if not _is_garbled(desc2, log_page=pg_num):
-                                        desc = desc2
-                                        print(f"[EXTRACT] page {pg_num + 1} OCR retry SUCCESS")
-                                    else:
-                                        desc = f"[OCR 인식 불완전 (페이지 {pg_num + 1})]\n{desc2}"
-                                else:
-                                    desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
-                        elif not is_ocr:
-                            desc = f"[이미지 설명: {desc}]"
-                        print(f"[EXTRACT] page {pg_num + 1} {label} DONE {elapsed:.1f}s len={len(desc)}")
-                    else:
-                        desc = f"[{label} 실패]"
-                        print(f"[EXTRACT] page {pg_num + 1} {label} EMPTY {elapsed:.1f}s")
-                except Exception as e:
-                    elapsed = _extract_time.time() - t0
-                    print(f"[EXTRACT] page {pg_num + 1} {label} FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
-                    desc = f"[{label} 실패]"
+
+                # 워커에서 PDF 열고 렌더링 (스레드세이프)
+                render_dpi = 300 if is_ocr else 150
+                worker_pdf = fitz.open(pdf_path_str)
+                pix = worker_pdf[pg_num].get_pixmap(dpi=render_dpi)
+                img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+                worker_pdf.close()
+                print(f"[EXTRACT] page {pg_num + 1} render {pix.width}x{pix.height} dpi={render_dpi}")
+
+                if is_ocr:
+                    # 깨진 텍스트 → PaddleOCR
+                    try:
+                        desc = _paddle_ocr_image(img_b64)
+                        elapsed = _extract_time.time() - t0
+                        if desc and desc.strip():
+                            desc = desc.strip()
+                            preview = desc[:200].replace('\n', ' ')
+                            print(f"[EXTRACT] page {pg_num + 1} PaddleOCR OK {elapsed:.1f}s len={len(desc)} preview: {preview}")
+                        else:
+                            desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
+                            print(f"[EXTRACT] page {pg_num + 1} PaddleOCR EMPTY {elapsed:.1f}s")
+                    except Exception as e:
+                        elapsed = _extract_time.time() - t0
+                        print(f"[EXTRACT] page {pg_num + 1} PaddleOCR FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
+                        desc = f"[OCR 실패 (페이지 {pg_num + 1})]"
+                else:
+                    # 이미지 페이지 → Vision LLM
+                    try:
+                        desc = call_vision_llm(VISION_PROMPT, img_b64)
+                        elapsed = _extract_time.time() - t0
+                        if desc and desc.strip():
+                            desc = f"[이미지 설명: {desc.strip()}]"
+                            print(f"[EXTRACT] page {pg_num + 1} Vision OK {elapsed:.1f}s len={len(desc)}")
+                        else:
+                            desc = "[이미지 설명 실패]"
+                            print(f"[EXTRACT] page {pg_num + 1} Vision EMPTY {elapsed:.1f}s")
+                    except Exception as e:
+                        elapsed = _extract_time.time() - t0
+                        print(f"[EXTRACT] page {pg_num + 1} Vision FAIL {elapsed:.1f}s: {type(e).__name__}: {e}")
+                        desc = "[이미지 설명 실패]"
                 return pg_num, desc
 
             executor = ThreadPoolExecutor(max_workers=2)
@@ -544,11 +582,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
                 if needs_vision:
                     is_ocr = page_num in garbled_pages
-                    render_dpi = 300 if is_ocr else 150
-                    pix = page.get_pixmap(dpi=render_dpi)
-                    img_b64 = base64.b64encode(pix.tobytes("png")).decode()
-                    print(f"[EXTRACT] PDF page {page_num + 1} render {pix.width}x{pix.height} → Vision LLM")
-                    future = executor.submit(_vision_task, page_num, img_b64, is_ocr)
+                    future = executor.submit(_vision_task, page_num, is_ocr)
                     future.add_done_callback(_on_vision_done)
                     vision_futures.append(future)
                     vision_submitted += 1
