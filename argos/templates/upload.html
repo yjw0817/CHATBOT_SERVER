@@ -94,9 +94,13 @@
                     <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
                         Manualize</button>
                     {% endif %}
+                    {% if doc.has_rag %}
+                    <button class="btn-small btn-approve" disabled style="opacity:0.5;cursor:not-allowed;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;">✓ RAG 완료</button>
+                    {% else %}
                     <button class="btn-small btn-approve" id="approve-btn-{{ doc.doc_id }}"
                         onclick="approve('{{ doc.doc_id }}')"
                         {% if not doc.has_pass %}disabled style="opacity:0.4;cursor:not-allowed;"{% endif %}>⚙️ RAG 데이터화</button>
+                    {% endif %}
                     <button class="btn-small" style="background:#f87171;color:white;" onclick="deleteDocument('{{ doc.doc_id }}', '{{ doc.title }}')">🗑️</button>
                     {% else %}
                     <span class="text-muted">Archived</span>
