@@ -403,6 +403,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
         try:
             import fitz
             import base64
+            fitz.TOOLS.mupdf_display_errors(False)
 
             pdf_doc = fitz.open(str(file_path))
             total_pages = len(pdf_doc)
