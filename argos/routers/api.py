@@ -668,11 +668,16 @@ def get_char_count(doc_id: str):
 def get_manualize_progress(doc_id: str):
     """Poll manualize progress. Returns {done, total, cancelled, sections}."""
     prog = _manualize_progress.get(doc_id, {"done": 0, "total": 0})
+    # Flatten sections for frontend: {name: text} (strip source_anchor metadata)
+    raw_sections = prog.get("sections", {})
+    flat_sections = {}
+    for k, v in raw_sections.items():
+        flat_sections[k] = v["text"] if isinstance(v, dict) and "text" in v else v
     return {
         "done": prog.get("done", 0),
         "total": prog.get("total", 0),
         "cancelled": prog.get("cancelled", False),
-        "sections": prog.get("sections", {}),
+        "sections": flat_sections,
     }
 
 
@@ -726,6 +731,7 @@ raw_text: {raw_text}
       "section_id": "",
       "name": "",
       "tags": [],
+      "source_anchor": "",
       "content": [
         {{
           "rule_id": "",
@@ -781,6 +787,13 @@ raw_text: {raw_text}
 section_id:
 - 섹션명 slug 사용
 - 없으면 "general"
+
+[source_anchor 규칙]
+- 각 섹션에 반드시 source_anchor 필드를 포함
+- source_anchor는 해당 섹션 내용의 근거가 된 원본 텍스트(raw_text)에서 실제로 등장하는 연속된 문자열 20~40자를 그대로 복사
+- 요약하거나 바꾸지 말고, 원본에서 그대로 가져올 것
+- 원본에서 해당 섹션의 시작 부분 근처 텍스트를 사용
+- 원본에 해당 내용이 없으면 빈 문자열 ""
 
 [rule 생성 규칙]
 
@@ -940,18 +953,27 @@ def manualize(doc_id: str, force: bool = False):
     cursor.execute("DELETE FROM manual_sections WHERE doc_id = %s", (doc_id,))
     cursor.execute("UPDATE documents SET completed_phases = NULL WHERE doc_id = %s", (doc_id,))
     sec_counter = 0
-    for section_name, section_text in sections_map.items():
+    section_details = {}  # {name: text} for response (backward-compatible)
+    for section_name, section_data in sections_map.items():
         sec_counter += 1
         if not section_name or not section_name.strip():
             section_name = f"## 기타 ({sec_counter})"
         section_id = f"sec_{uuid.uuid4().hex[:8]}"
-        text_val = section_text if section_text else "정보 없음"
+        if isinstance(section_data, dict):
+            text_val = section_data.get("text", "") or "정보 없음"
+            anchor_val = section_data.get("source_anchor", "")
+        else:
+            text_val = section_data if section_data else "정보 없음"
+            anchor_val = ""
+        section_details[section_name] = text_val
         cursor.execute(
             """INSERT INTO manual_sections
                (section_id, doc_id, section_name, section_text, ai_text,
+                source_anchor,
                 gate_status, gate_score, gate_reasons_json, gate_stale, sort_order)
-               VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, 0, %s)""",
-            (section_id, doc_id, section_name, text_val, text_val, sec_counter)
+               VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, NULL, 0, %s)""",
+            (section_id, doc_id, section_name, text_val, text_val,
+             anchor_val, sec_counter)
         )
 
     cursor.execute("UPDATE documents SET updated_at = %s WHERE doc_id = %s",
@@ -963,7 +985,7 @@ def manualize(doc_id: str, force: bool = False):
         "success": True,
         "doc_id": doc_id,
         "sections": list(sections_map.keys()),
-        "section_details": sections_map,
+        "section_details": section_details,
         "todo_questions": [],
         "change_summary": "",
         "pii_handling": {},
@@ -975,7 +997,7 @@ def manualize(doc_id: str, force: bool = False):
 
 
 def _manualize_single(raw_text: str, doc_id: str) -> dict:
-    """Single LLM call with full raw_text. Returns {section_name: section_text}."""
+    """Single LLM call with full raw_text. Returns {section_name: {"text": ..., "source_anchor": ...}}."""
     content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text), temperature=0.3)
     if not content:
         raise Exception("LLM 응답이 비어있습니다.")
@@ -1045,42 +1067,46 @@ def _group_sections_into_windows(sections: list, window_size: int) -> list:
 
 
 def _process_one_window(window_text: str, idx: int, total: int) -> dict:
-    """Process a single window. Returns {section_name: section_text}.
+    """Process a single window. Returns {section_name: {"text": ..., "source_anchor": ...}}.
     LLM 실패 시에도 원문을 보존하여 데이터 로스 방지."""
     print(f"[MANUALIZE] Processing window {idx + 1}/{total} ({len(window_text)} chars)...")
 
     # 원문에서 폴백 섹션명 추출 (첫 줄 사용)
     first_line = window_text.strip().split('\n')[0][:60].strip()
     fallback_name = first_line if first_line else f"섹션 (윈도우 {idx + 1})"
+    fallback = {fallback_name: {"text": window_text, "source_anchor": ""}}
 
     try:
         content = call_llm(MANUALIZE_PROMPT.format(raw_text=window_text), temperature=0.3)
         if not content:
             print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
-            return {fallback_name: window_text}
+            return fallback
         json_match = re.search(r'\{[\s\S]*\}', content)
         if not json_match:
             print(f"[MANUALIZE] Window {idx + 1}: JSON 파싱 실패 → 원문 보존")
-            return {fallback_name: window_text}
+            return fallback
         parsed = _clean_llm_json(json_match.group())
         result = _flatten_manualize_json(parsed)
         if not result:
             print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → 원문 보존")
-            return {fallback_name: window_text}
+            return fallback
         return result
     except Exception as e:
         print(f"[MANUALIZE] Window {idx + 1} failed: {e} → 원문 보존")
-        return {fallback_name: window_text}
+        return fallback
 
 
 def _merge_sections(all_sections: dict, new_sections: dict, idx: int) -> None:
-    """Merge new_sections into all_sections. Dedup by exact match, index on conflict."""
-    for name, text in new_sections.items():
+    """Merge new_sections into all_sections. Dedup by exact match, index on conflict.
+    Values are {"text": ..., "source_anchor": ...} dicts."""
+    for name, section_data in new_sections.items():
+        text = section_data["text"] if isinstance(section_data, dict) else section_data
         if name in all_sections:
-            if all_sections[name].strip() == text.strip():
+            existing_text = all_sections[name]["text"] if isinstance(all_sections[name], dict) else all_sections[name]
+            if existing_text.strip() == text.strip():
                 continue
             name = f"{name} ({idx + 1})"
-        all_sections[name] = text
+        all_sections[name] = section_data
 
 
 def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
@@ -1276,6 +1302,7 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
     if not section_name or not section_name.strip():
         section_name = f"## 기타 (chunk-{chunk_id[:8]})"
     section_text = result["section_text"] or "정보 없음"
+    source_anchor = result.get("source_anchor", "")
     evidence = result.get("evidence_spans", [])
 
     # Save section (check if already exists for this chunk)
@@ -1284,8 +1311,8 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
     if existing:
         cursor.execute(
             """UPDATE manual_sections SET section_name = %s, section_text = %s,
-               evidence_json = %s, updated_at = %s WHERE section_id = %s""",
-            (section_name, section_text,
+               source_anchor = %s, evidence_json = %s, updated_at = %s WHERE section_id = %s""",
+            (section_name, section_text, source_anchor,
              json.dumps(evidence, ensure_ascii=False),
              datetime.now().isoformat(), existing["section_id"])
         )
@@ -1295,10 +1322,10 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
         cursor.execute(
             """INSERT INTO manual_sections
                (section_id, doc_id, section_name, section_text,
-                source_chunk_id, evidence_json, merge_status, sort_order)
-               VALUES (%s, %s, %s, %s, %s, %s, 'BODY', %s)""",
+                source_chunk_id, source_anchor, evidence_json, merge_status, sort_order)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, 'BODY', %s)""",
             (section_id, doc_id, section_name, section_text,
-             chunk_id, json.dumps(evidence, ensure_ascii=False),
+             chunk_id, source_anchor, json.dumps(evidence, ensure_ascii=False),
              chunk["chunk_index"])
         )
 
@@ -1384,6 +1411,7 @@ def manualize_batch_endpoint(doc_id: str, batch_id: str):
         if not section_name or not section_name.strip():
             section_name = f"## 기타 (chunk-{chunk_id[:8]})"
         section_text = result.get("section_text", "") or "정보 없음"
+        source_anchor = result.get("source_anchor", "")
         evidence_spans = result.get("evidence_spans", [])
 
         # Index evidence spans
@@ -1396,8 +1424,8 @@ def manualize_batch_endpoint(doc_id: str, batch_id: str):
         if existing:
             cursor.execute(
                 """UPDATE manual_sections SET section_name = %s, section_text = %s,
-                   evidence_json = %s, updated_at = %s WHERE section_id = %s""",
-                (section_name, section_text,
+                   source_anchor = %s, evidence_json = %s, updated_at = %s WHERE section_id = %s""",
+                (section_name, section_text, source_anchor,
                  json.dumps(indexed_spans, ensure_ascii=False),
                  datetime.now().isoformat(), existing["section_id"]))
             section_id = existing["section_id"]
@@ -1406,10 +1434,10 @@ def manualize_batch_endpoint(doc_id: str, batch_id: str):
             cursor.execute(
                 """INSERT INTO manual_sections
                    (section_id, doc_id, section_name, section_text,
-                    source_chunk_id, evidence_json, merge_status, sort_order)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'BODY', %s)""",
+                    source_chunk_id, source_anchor, evidence_json, merge_status, sort_order)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'BODY', %s)""",
                 (section_id, doc_id, section_name, section_text,
-                 chunk_id, json.dumps(indexed_spans, ensure_ascii=False),
+                 chunk_id, source_anchor, json.dumps(indexed_spans, ensure_ascii=False),
                  chunk_index_map.get(chunk_id, 0)))
 
         evidence_matched = sum(1 for s in indexed_spans if s.get("char_start", -1) >= 0)
@@ -2264,11 +2292,12 @@ def _clean_llm_json(raw: str):
 
 
 def _flatten_manualize_json(parsed: dict) -> dict:
-    """Convert MANUALIZE_PROMPT JSON output to flat {section_name: section_text} dict.
+    """Convert MANUALIZE_PROMPT JSON output to flat {section_name: {"text": ..., "source_anchor": ...}} dict.
     Formats each section as structured markdown (## / ### / - bullets)."""
     sections_map = {}
     for sec in parsed.get("sections", []):
         name = sec.get("name", sec.get("section_id", "general"))
+        anchor = sec.get("source_anchor", "")
         lines = [f"## {name}"]
         for rule in sec.get("content", []):
             title = rule.get("title", "")
@@ -2287,14 +2316,14 @@ def _flatten_manualize_json(parsed: dict) -> dict:
             for exc_item in st.get("exceptions", []):
                 lines.append(f"- 예외: {exc_item}")
         section_text = "\n".join(lines)
-        sections_map[name] = section_text
+        sections_map[name] = {"text": section_text, "source_anchor": anchor}
     # Fallback: if no sections parsed, try summary
     if not sections_map:
         summary = parsed.get("summary", "")
         if summary:
-            sections_map["general"] = f"## 요약\n- {summary}"
+            sections_map["general"] = {"text": f"## 요약\n- {summary}", "source_anchor": ""}
         else:
-            sections_map["general"] = "정보 없음"
+            sections_map["general"] = {"text": "정보 없음", "source_anchor": ""}
     return sections_map
 
 
@@ -2366,6 +2395,7 @@ RFC8259 유효 JSON만 출력. 코드블록, 설명, 주석, 마크다운 금지
 {{
   "section_name": "이 chunk의 주제를 대표하는 섹션명",
   "section_text": "구조화된 텍스트 (## 헤딩, ### 항목, - 불릿 형식)",
+  "source_anchor": "raw_chunk 원문에서 그대로 복사한 연속 20~40자 (해당 섹션 시작 부분 근처)",
   "evidence_spans": [
     {{
       "span_text": "raw_chunk에서 복사한 근거 문장 (20~80자)",
@@ -2543,6 +2573,7 @@ RFC8259 유효 JSON만 출력. 코드블록/설명/주석 금지.
       "item_id": "S001",
       "section_name": "섹션 주제를 대표하는 이름",
       "section_text": "구조화된 텍스트 (## / ### / - 형식)",
+      "source_anchor": "원문에서 그대로 복사한 연속 20~40자 (해당 섹션 시작 부분 근처)",
       "evidence_spans": [
         {{
           "span_text": "원문에서 복사한 근거 문장 (20~80자)",
@@ -2748,6 +2779,7 @@ def _manualize_chunk(chunk: dict, doc_id: str) -> dict:
                     result = _clean_llm_json(json_match.group())
                     section_name = result.get("section_name", f"Chunk-{chunk.get('chunk_index', 0)}")
                     section_text = result.get("section_text", "")
+                    source_anchor = result.get("source_anchor", "")
                     evidence_spans = result.get("evidence_spans", [])
 
                     # Index evidence spans
@@ -2756,6 +2788,7 @@ def _manualize_chunk(chunk: dict, doc_id: str) -> dict:
                     return {
                         "section_name": section_name,
                         "section_text": section_text,
+                        "source_anchor": source_anchor,
                         "evidence_spans": indexed_spans,
                         "chunk_id": chunk_id,
                         "success": True
@@ -2767,6 +2800,7 @@ def _manualize_chunk(chunk: dict, doc_id: str) -> dict:
     return {
         "section_name": f"[미처리] Chunk-{chunk.get('chunk_index', 0)}",
         "section_text": raw_chunk[:3000],
+        "source_anchor": "",
         "evidence_spans": [],
         "chunk_id": chunk_id,
         "success": False
@@ -3288,11 +3322,102 @@ def _body_fallback_match(section_text: str, raw_text: str, min_phrase_len: int =
     return region if region else None
 
 
+def _refine_chunk_to_sections(raw_chunk: str, section_names: list, section_texts: dict = None) -> dict:
+    """Chunk 내부를 heading으로 세분화하여 각 섹션에 해당하는 원문 구간만 매핑.
+    section_texts: {section_name: manualized_text} — 정밀 매칭에 사용.
+    매핑 실패 시 섹션 텍스트 기반 구간 추출, 최종 fallback은 chunk 전체."""
+    sub_chunks = _split_raw_by_headings(raw_chunk)
+
+    result = {}
+    for sec_name in section_names:
+        matched = None
+
+        # 1차: heading 매칭 (sub_chunks가 있을 때만)
+        if sub_chunks:
+            idx = _heading_match(sec_name, sub_chunks)
+            if idx >= 0:
+                matched = sub_chunks[idx]["body"]
+
+        # 2차: 섹션 매뉴얼 텍스트로 chunk 내 구간 추출
+        if not matched and section_texts and section_texts.get(sec_name):
+            matched = _extract_relevant_region(section_texts[sec_name], raw_chunk)
+
+        # 3차: fallback — chunk 전체 (단, 크기 제한)
+        if not matched:
+            max_fallback = 15000  # ~15K chars 상한
+            if len(raw_chunk) <= max_fallback:
+                matched = raw_chunk
+            else:
+                matched = raw_chunk[:max_fallback] + "\n\n... (원본 텍스트가 너무 길어 일부만 표시합니다)"
+
+        result[sec_name] = matched
+    return result
+
+
+def _extract_relevant_region(section_text: str, raw_text: str, context_lines: int = 3) -> str | None:
+    """섹션의 매뉴얼 텍스트에서 키워드를 추출하여 raw_text 내 관련 구간만 반환.
+    _body_fallback_match와 달리 밀집 구간(cluster)만 추출하여 문서 전체 반환 방지."""
+    if not section_text or not raw_text:
+        return None
+
+    # 섹션 텍스트에서 [이미지 설명: ...] 블록 제거 후 키워드 추출
+    # (이미지 설명은 Vision LLM이 생성한 텍스트로, 원본에는 없는 내용)
+    cleaned_section = re.sub(r'\[이미지 설명:.*?\]', '', section_text, flags=re.DOTALL)
+    sec_lines = [ln.lstrip("#>*- \t").strip() for ln in cleaned_section.split("\n")]
+    sec_keywords = set()
+    for ln in sec_lines:
+        if len(ln) >= 4:
+            sec_keywords.update(re.findall(r'[\w가-힣]{4,}', ln.lower()))
+    if not sec_keywords:
+        return None
+
+    # raw_text 각 라인별 매칭 점수 계산
+    raw_lines = raw_text.split("\n")
+    line_scores = []
+    for ri, raw_ln in enumerate(raw_lines):
+        raw_ln_clean = raw_ln.lstrip("#>*- \t").strip()
+        if len(raw_ln_clean) < 3:
+            line_scores.append(0)
+            continue
+        raw_words = set(re.findall(r'[\w가-힣]{4,}', raw_ln_clean.lower()))
+        hits = len(sec_keywords & raw_words)
+        line_scores.append(hits)
+
+    # 밀집 구간 찾기: 슬라이딩 윈도우로 매칭 밀도가 가장 높은 구간
+    if sum(line_scores) == 0:
+        return None
+
+    # 윈도우 크기: 이미지 설명 제거 후 실제 내용 라인 수 기준, 최대 400줄
+    sec_line_count = len([ln for ln in sec_lines if ln.strip()])
+    window_size = min(max(30, sec_line_count), 400)
+    window_size = min(window_size, len(raw_lines))
+
+    best_start, best_score = 0, 0
+    current_score = sum(line_scores[:window_size])
+    if current_score > best_score:
+        best_score = current_score
+        best_start = 0
+
+    for i in range(1, len(raw_lines) - window_size + 1):
+        current_score += line_scores[i + window_size - 1] - line_scores[i - 1]
+        if current_score > best_score:
+            best_score = current_score
+            best_start = i
+
+    if best_score == 0:
+        return None
+
+    # 윈도우 전후 context_lines 추가
+    start = max(0, best_start - context_lines)
+    end = min(len(raw_lines), best_start + window_size + context_lines)
+    region = "\n".join(raw_lines[start:end]).strip()
+    return region if region else None
+
+
 @router.get("/doc/{doc_id}/source-map")
 def get_source_map(doc_id: str):
     """Get per-section matched raw text.
-    Chunk-based: uses doc_chunks JOIN for precise raw_chunk mapping.
-    Legacy: falls back to heading matching."""
+    Priority: source_anchor (str.find) → chunk-based refinement → heading matching → keyword fallback."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
@@ -3301,77 +3426,129 @@ def get_source_map(doc_id: str):
         conn.close()
         raise HTTPException(status_code=404, detail="Document not found")
 
-    cursor.execute("SELECT section_name, source_chunk_id, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
+    try:
+        cursor.execute("""SELECT section_name, source_chunk_id, section_text, source_anchor
+                          FROM manual_sections WHERE doc_id = %s
+                          ORDER BY sort_order, section_id""", (doc_id,))
+    except Exception:
+        cursor.execute("""SELECT section_name, source_chunk_id, section_text, NULL as source_anchor
+                          FROM manual_sections WHERE doc_id = %s
+                          ORDER BY sort_order, section_id""", (doc_id,))
     sections = cursor.fetchall()
     conn.close()
 
     raw_text = doc["raw_text"] or ""
 
-    # Check if any section has source_chunk_id (chunk-based document)
-    has_chunks = any(row["source_chunk_id"] for row in sections)
+    # 섹션명 → 매뉴얼 텍스트 맵 (정밀 매칭용)
+    all_section_texts = {row["section_name"]: row["section_text"] or "" for row in sections}
 
-    if has_chunks:
-        # Chunk-based: JOIN doc_chunks for raw_chunk
+    # Batch-load chunk data if needed
+    chunk_ids_needed = set()
+    for row in sections:
+        cid = row["source_chunk_id"]
+        if cid:
+            chunk_ids_needed.add(cid)
+    chunk_data = {}  # chunk_id → raw_chunk
+    if chunk_ids_needed:
         conn2 = get_connection()
         cursor2 = conn2.cursor()
-        source_map = {}
-        matched_count = 0
-        for row in sections:
-            name = row["section_name"]
-            chunk_id = row["source_chunk_id"]
-            if chunk_id:
-                cursor2.execute("SELECT raw_chunk FROM doc_chunks WHERE chunk_id = %s", (chunk_id,))
-                chunk_row = cursor2.fetchone()
-                if chunk_row and chunk_row["raw_chunk"]:
-                    source_map[name] = chunk_row["raw_chunk"]
-                    matched_count += 1
-                else:
-                    source_map[name] = None
-            else:
-                source_map[name] = None
+        placeholders = ",".join(["%s"] * len(chunk_ids_needed))
+        cursor2.execute(f"SELECT chunk_id, raw_chunk FROM doc_chunks WHERE chunk_id IN ({placeholders})",
+                        list(chunk_ids_needed))
+        for row in cursor2.fetchall():
+            chunk_data[row["chunk_id"]] = row["raw_chunk"]
+        cursor2.close()
         conn2.close()
-        # Body fallback for unmatched sections
-        for row in sections:
-            name = row["section_name"]
-            if source_map.get(name) is None:
-                fallback = _body_fallback_match(row["section_text"] or "", raw_text)
-                if fallback:
-                    source_map[name] = fallback
-                    matched_count += 1
-        return {"source_map": source_map, "raw_text": raw_text, "matched": matched_count}
-
-    # Legacy: heading-based matching
-    section_names = [row["section_name"] for row in sections]
-    section_texts = {row["section_name"]: row["section_text"] or "" for row in sections}
-    chunks = _split_raw_by_headings(raw_text)
-    if not chunks:
-        # No headings found — try body fallback for every section
-        source_map = {}
-        for name in section_names:
-            source_map[name] = _body_fallback_match(section_texts[name], raw_text)
-        return {"source_map": source_map, "raw_text": raw_text, "matched": sum(1 for v in source_map.values() if v is not None)}
-
-    match_indices = []
-    for sec_name in section_names:
-        idx = _heading_match(sec_name, chunks)
-        match_indices.append(idx)
 
     source_map = {}
-    for i, sec_name in enumerate(section_names):
-        idx = match_indices[i]
-        if idx < 0:
-            # Heading match failed — try body fallback
-            source_map[sec_name] = _body_fallback_match(section_texts[sec_name], raw_text)
-            continue
-        next_chunk_idx = len(chunks)
-        for j in range(i + 1, len(section_names)):
-            if match_indices[j] > idx:
-                next_chunk_idx = match_indices[j]
-                break
-        parts = [chunks[k]["body"] for k in range(idx, min(next_chunk_idx, len(chunks)))]
-        source_map[sec_name] = "\n\n".join(parts)
+    matched_count = 0
+    anchor_used = 0
+    fallback_sections = []
 
-    return {"source_map": source_map, "raw_text": raw_text, "matched": sum(1 for v in source_map.values() if v is not None)}
+    for section in sections:
+        name = section["section_name"]
+        anchor = section["source_anchor"] or ""
+        chunk_id = section["source_chunk_id"]
+
+        # === Priority 1: source_anchor based matching ===
+        if anchor and len(anchor) >= 10:
+            search_text = chunk_data.get(chunk_id) if chunk_id else None
+            if not search_text:
+                search_text = raw_text
+            pos = search_text.find(anchor)
+            if pos != -1:
+                start = max(0, pos - 200)
+                end = min(len(search_text), pos + len(anchor) + 500)
+                source_map[name] = search_text[start:end]
+                matched_count += 1
+                anchor_used += 1
+                continue
+
+        # === Priority 2: chunk-based refinement ===
+        if chunk_id and chunk_data.get(chunk_id):
+            raw_chunk = chunk_data[chunk_id]
+            refined = _refine_chunk_to_sections(raw_chunk, [name], all_section_texts)
+            if refined.get(name):
+                source_map[name] = refined[name]
+                matched_count += 1
+                continue
+
+        # === Priority 3: collect for heading/keyword fallback ===
+        fallback_sections.append(section)
+
+    # Legacy fallback
+    if fallback_sections:
+        has_chunks = any(row["source_chunk_id"] for row in fallback_sections)
+        if not has_chunks:
+            chunks = _split_raw_by_headings(raw_text)
+            if chunks:
+                section_names_fb = [row["section_name"] for row in fallback_sections]
+                match_indices = [_heading_match(sn, chunks) for sn in section_names_fb]
+                for i, sec_row in enumerate(fallback_sections):
+                    sec_name = sec_row["section_name"]
+                    idx = match_indices[i]
+                    if idx < 0:
+                        region = _extract_relevant_region(all_section_texts[sec_name], raw_text)
+                        if not region:
+                            region = _body_fallback_match(all_section_texts[sec_name], raw_text)
+                        source_map[sec_name] = region
+                        if region:
+                            matched_count += 1
+                    else:
+                        next_chunk_idx = len(chunks)
+                        for j in range(i + 1, len(section_names_fb)):
+                            if match_indices[j] > idx:
+                                next_chunk_idx = match_indices[j]
+                                break
+                        parts = [chunks[k]["body"] for k in range(idx, min(next_chunk_idx, len(chunks)))]
+                        matched_text = "\n\n".join(parts)
+                        sec_len = len(all_section_texts.get(sec_name, ""))
+                        if sec_len > 0 and len(matched_text) > max(sec_len * 5, 20000):
+                            refined = _extract_relevant_region(all_section_texts[sec_name], matched_text)
+                            source_map[sec_name] = refined if refined else matched_text
+                        else:
+                            source_map[sec_name] = matched_text
+                        matched_count += 1
+            else:
+                for sec_row in fallback_sections:
+                    sec_name = sec_row["section_name"]
+                    region = _extract_relevant_region(all_section_texts[sec_name], raw_text)
+                    if not region:
+                        region = _body_fallback_match(all_section_texts[sec_name], raw_text)
+                    source_map[sec_name] = region
+                    if region:
+                        matched_count += 1
+        else:
+            for sec_row in fallback_sections:
+                sec_name = sec_row["section_name"]
+                region = _extract_relevant_region(all_section_texts[sec_name], raw_text)
+                if not region:
+                    region = _body_fallback_match(all_section_texts[sec_name], raw_text)
+                source_map[sec_name] = region
+                if region:
+                    matched_count += 1
+
+    return {"source_map": source_map, "matched": matched_count, "anchor_used": anchor_used}
 
 
 @router.get("/doc/{doc_id}/issues")
