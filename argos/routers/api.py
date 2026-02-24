@@ -273,8 +273,8 @@ def list_documents(apt_id: Optional[str] = None):
 
 # ============ STEP 2: EXTRACT TEXT ============
 
-VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해."
-VISION_OCR_PROMPT = "이 이미지의 모든 텍스트를 정확히 읽어서 그대로 출력해. 내용을 해석하거나 요약하지 말고 텍스트만 추출해."
+VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해. 마크다운 헤딩(###, ##, #)을 절대 사용하지 마. 일반 문장으로만 설명해."
+VISION_OCR_PROMPT = "이 이미지의 모든 텍스트를 정확히 읽어서 그대로 출력해. 내용을 해석하거나 요약하지 말고 텍스트만 추출해. 마크다운 헤딩(###, ##, #)을 절대 사용하지 마."
 
 
 def _render_page_pypdfium2(pdf_path: str, page_num: int, dpi: int = 200) -> str:
@@ -640,7 +640,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
 
 
 MANUALIZE_HARD_LIMIT = 30000  # chars — force window split above this (128K ctx 기준)
-MANUALIZE_WINDOW_SIZE = 25000  # chars per window (~37K tokens, 128K ctx의 ~75%)
+MANUALIZE_WINDOW_SIZE = 10000  # chars per window (~15K tokens, JSON 출력 폭발 방지)
 MANUALIZE_WINDOW_OVERLAP = 300
 
 # Manualize progress tracker (in-memory, per doc_id)
@@ -1045,20 +1045,32 @@ def _group_sections_into_windows(sections: list, window_size: int) -> list:
 
 
 def _process_one_window(window_text: str, idx: int, total: int) -> dict:
-    """Process a single window. Returns {section_name: section_text} or empty dict."""
+    """Process a single window. Returns {section_name: section_text}.
+    LLM 실패 시에도 원문을 보존하여 데이터 로스 방지."""
     print(f"[MANUALIZE] Processing window {idx + 1}/{total} ({len(window_text)} chars)...")
+
+    # 원문에서 폴백 섹션명 추출 (첫 줄 사용)
+    first_line = window_text.strip().split('\n')[0][:60].strip()
+    fallback_name = first_line if first_line else f"섹션 (윈도우 {idx + 1})"
+
     try:
         content = call_llm(MANUALIZE_PROMPT.format(raw_text=window_text), temperature=0.3)
         if not content:
-            return {}
+            print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
+            return {fallback_name: window_text}
         json_match = re.search(r'\{[\s\S]*\}', content)
         if not json_match:
-            return {}
+            print(f"[MANUALIZE] Window {idx + 1}: JSON 파싱 실패 → 원문 보존")
+            return {fallback_name: window_text}
         parsed = _clean_llm_json(json_match.group())
-        return _flatten_manualize_json(parsed)
+        result = _flatten_manualize_json(parsed)
+        if not result:
+            print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → 원문 보존")
+            return {fallback_name: window_text}
+        return result
     except Exception as e:
-        print(f"[MANUALIZE] Window {idx + 1} failed: {e}")
-        return {}
+        print(f"[MANUALIZE] Window {idx + 1} failed: {e} → 원문 보존")
+        return {fallback_name: window_text}
 
 
 def _merge_sections(all_sections: dict, new_sections: dict, idx: int) -> None:
