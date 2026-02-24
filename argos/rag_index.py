@@ -127,7 +127,7 @@ def _load_chunk_details(apt_id: str, chunk_ids: list[str]) -> dict:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT c.chunk_id, c.doc_id, c.section_name, c.chunk_text, d.title as doc_title
+        SELECT c.chunk_id, c.doc_id, c.section_name, c.chunk_text, c.page_start, c.page_end, d.title as doc_title
         FROM chunks c
         JOIN documents d ON c.doc_id = d.doc_id
         WHERE d.apt_id = %s AND d.status = 'APPROVED'

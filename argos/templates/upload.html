@@ -1797,12 +1797,26 @@
                     else if (st === 'NEED_FIX') need_fix++;
                     else if (st === 'BLOCK') block++;
                     if (data.time_s) totalGateTime += data.time_s;
-                    // Update section gate UI
+                    // 즉시 배지 + reasons 표시 (완료된 섹션부터 바로 확인/수정 가능)
                     updateSectionGateUI(sec.idx, st);
+                    const textarea = document.getElementById(`editor-${sec.idx}`);
+                    if (textarea && data.reasons) {
+                        textarea.dataset.gateReasons = JSON.stringify(data.reasons);
+                    }
+                    const reasonsJson = data.reasons ? JSON.stringify(data.reasons) : '[]';
+                    const box = document.getElementById(`gate-reasons-${sec.idx}`);
+                    const newHTML = renderGateReasonsHTML(st, reasonsJson, sec.idx, data.time_s);
+                    if (box) {
+                        if (newHTML) { box.outerHTML = newHTML; }
+                        else { box.remove(); }
+                    } else if (newHTML) {
+                        const card = document.getElementById(`section-card-${sec.idx}`);
+                        if (card) card.insertAdjacentHTML('afterbegin', newHTML);
+                    }
                     _markSectionPhase(sec.idx, 3);
                 }
             }, (d, f) => {
-                if (ctx.lamp) ctx.lamp.textContent = `③ Gate 검증 중... ${charsLabel} · ${d}/${list.length}`;
+                if (ctx.lamp) ctx.lamp.textContent = `③ Gate 검증 중... ${charsLabel} · ${d}/${list.length} (PASS ${pass_count} / NEED_FIX ${need_fix})`;
             });
             // Stop lamp immediately after all sections done
             _markBtnDone('btn-gate-all', '③ Gate(전체) ✓');
@@ -1816,7 +1830,6 @@
             }
             // Post-processing (non-blocking, fail-safe)
             _savePhase(currentDocId, 'gate');
-            openEditor(currentDocId).catch(e => console.warn('[GATE_ALL] editor refresh failed:', e));
         } catch(e) {
             console.error('[GATE_ALL]', e);
             _stopLamp(ctx, 'Gate 검증 실패', true);

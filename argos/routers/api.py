@@ -602,7 +602,7 @@ def extract_text(doc_id: str, resume_page: int = 0):
                 if pg_num in image_descs:
                     page_parts.append(image_descs[pg_num])
                 if page_parts:
-                    parts.append("\n".join(page_parts))
+                    parts.append(f"[p.{pg_num + 1}]\n" + "\n".join(page_parts))
             raw_text = "\n".join(parts)
             if _is_extract_cancelled(doc_id):
                 # 취소 시: progress 유지 (이어하기용), pages만 제거 (메모리 절약)
@@ -3093,6 +3093,20 @@ def publish_all(doc_id: str):
     chunk_size = 500
     overlap = 100
 
+    def _extract_page_nums(full_text, start_pos, end_pos):
+        """[p.N] 마커에서 chunk가 걸치는 page_start/page_end 추출"""
+        markers = list(re.finditer(r'\[p\.(\d+)\]', full_text))
+        if not markers:
+            return None, None
+        page_start = None
+        page_end = None
+        for m in markers:
+            if m.start() <= start_pos:
+                page_start = int(m.group(1))
+            if m.start() <= end_pos:
+                page_end = int(m.group(1))
+        return page_start, page_end or page_start
+
     for sec in pass_sections:
         section_name = sec["section_name"]
         text = sec["section_text"]
@@ -3109,16 +3123,20 @@ def publish_all(doc_id: str):
 
                 if chunk_text.strip():
                     chunk_id = f"chunk_{uuid.uuid4().hex[:8]}"
+                    # 페이지 번호 추출 (마커 기준)
+                    page_start, page_end = _extract_page_nums(text, start, end)
+                    # chunk_text에서 [p.N] 마커 제거
+                    clean_chunk = re.sub(r'\[p\.\d+\]\n?', '', chunk_text)
                     # Generate embedding
                     embedding_blob = None
                     try:
-                        emb = get_embedding(chunk_text)
+                        emb = get_embedding(clean_chunk)
                         embedding_blob = np.array(emb, dtype=np.float32).tobytes()
                     except Exception as emb_err:
                         print(f"[PUBLISH_ALL] Embedding failed for {chunk_id}: {emb_err}")
                     cursor.execute(
-                        "INSERT INTO chunks (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding_blob, datetime.now().isoformat())
+                        "INSERT INTO chunks (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding, page_start, page_end, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (chunk_id, doc_id, section_name, chunk_index, clean_chunk, embedding_blob, page_start, page_end, datetime.now().isoformat())
                     )
                     chunk_index += 1
 
@@ -3602,7 +3620,7 @@ JSON 형식:
 {{
   "reply_text": "답변 내용 (간결하게)",
   "citations": [
-    {{"doc_id": "문서ID", "doc_title": "문서명", "section_name": "섹션명", "snippet": "인용 부분 120자 이내"}}
+    {{"doc_id": "문서ID", "doc_title": "문서명", "page": 페이지번호_또는_null, "section_name": "섹션명", "snippet": "인용 부분 120자 이내"}}
   ],
   "confidence": "HIGH|MED|LOW",
   "next_question": null 또는 "추가 질문(근거 부족시)",
@@ -3671,7 +3689,7 @@ def chat(req: ChatRequest):
         # Fallback: keyword search
         search_method = "keyword"
         cursor.execute("""
-            SELECT c.chunk_id, c.doc_id, c.section_name, c.chunk_text, d.title as doc_title
+            SELECT c.chunk_id, c.doc_id, c.section_name, c.chunk_text, c.page_start, c.page_end, d.title as doc_title
             FROM chunks c
             JOIN documents d ON c.doc_id = d.doc_id
             WHERE d.apt_id = %s AND d.status = 'APPROVED'
@@ -3697,7 +3715,12 @@ def chat(req: ChatRequest):
         # Build context
         context_parts = []
         for chunk in top_chunks:
-            context_parts.append(f"[문서: {chunk['doc_title']} / 섹션: {chunk['section_name']}]\n{chunk['chunk_text']}")
+            page_info = ""
+            ps = chunk.get('page_start')
+            pe = chunk.get('page_end')
+            if ps:
+                page_info = f" / 페이지: {ps}" if (not pe or pe == ps) else f" / 페이지: {ps}-{pe}"
+            context_parts.append(f"[문서: {chunk['doc_title']}{page_info} / 섹션: {chunk['section_name']}]\n{chunk['chunk_text']}")
         context = "\n\n".join(context_parts)
         
         if is_llm_available():
@@ -3723,6 +3746,7 @@ def chat(req: ChatRequest):
                 {
                     "doc_id": c["doc_id"],
                     "doc_title": c["doc_title"],
+                    "page": c.get("page_start"),
                     "section_name": c["section_name"],
                     "snippet": c["chunk_text"][:150] + "..." if len(c["chunk_text"]) > 150 else c["chunk_text"]
                 } for c in top_chunks[:2]

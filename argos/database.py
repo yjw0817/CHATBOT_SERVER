@@ -113,6 +113,9 @@ def init_db():
         ("manual_sections", ("ai_text", "LONGTEXT DEFAULT NULL")),
         ("manual_sections", ("sort_order", "INT DEFAULT 0")),
         ("manual_sections", ("source_anchor", "VARCHAR(500) DEFAULT NULL")),
+        # chunks migrations
+        ("chunks", ("page_start", "INT DEFAULT NULL")),
+        ("chunks", ("page_end", "INT DEFAULT NULL")),
         # documents migrations
         ("documents", ("manualize_json", "LONGTEXT DEFAULT NULL")),
         ("documents", ("raw_text_hash", "VARCHAR(64) DEFAULT NULL")),
@@ -166,6 +169,8 @@ def init_db():
             chunk_index INT,
             chunk_text TEXT,
             embedding BLOB DEFAULT NULL,
+            page_start INT DEFAULT NULL,
+            page_end INT DEFAULT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE,
             INDEX idx_chunk_doc (doc_id)
