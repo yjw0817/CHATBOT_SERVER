@@ -259,7 +259,7 @@ def ping_llm(timeout: float = 5.0) -> tuple:
         return False, f"LLM 연결 확인 실패: {str(e)}"
 
 
-def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-cloud") -> Optional[str]:
+def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-instruct-cloud") -> Optional[str]:
     """Ollama Vision LLM 호출. base64 이미지 + 텍스트 프롬프트."""
     import requests as _req
     config = _get_config()
@@ -275,7 +275,7 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         }],
         "stream": False,
         "think": False,
-        "options": {"num_ctx": 8192}
+        "options": {"num_ctx": 131072}
     }
     import time as _time
     print(f"[VISION_LLM] START model={model} image_size={len(image_base64)} prompt={prompt[:50]}...")

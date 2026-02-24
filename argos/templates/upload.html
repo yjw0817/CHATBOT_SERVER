@@ -650,7 +650,11 @@
         }
 
         let sectionIndex = 0;
-        Object.entries(data.section_details).forEach(([name, text]) => {
+        // sections_gate 배열 순서(sort_order) 기준으로 렌더링, 없으면 Object.entries 폴백
+        const orderedEntries = (data.sections_gate && data.sections_gate.length > 0)
+            ? data.sections_gate.map(s => [s.section_name, data.section_details[s.section_name] || s.section_text])
+            : Object.entries(data.section_details);
+        orderedEntries.forEach(([name, text]) => {
             const idx = sectionIndex++;
             const gate = gateInfo[name] || {};
             const isStale = gate.stale === 1 || gate.stale === true;
@@ -2007,13 +2011,14 @@
         const modalTitle = document.getElementById('modal-title');
         modalTitle.textContent = resumeParam ? '텍스트 추출 이어하기...' : '텍스트 추출 중...';
         modalBody.innerHTML = `
-            <div id="extract-header" style="display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid #e5e7eb;margin-bottom:8px;">
+            <div id="extract-header" style="position:sticky;top:0;z-index:1;background:#fff;display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid #e5e7eb;margin-bottom:8px;">
                 <div class="spinner"></div>
                 <span id="extract-progress-text" style="font-size:13px;color:#6b7280;">문서에서 내용을 읽어오고 있습니다...</span>
                 <button id="extract-cancel-btn" style="margin-left:auto;padding:6px 16px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid #fca5a5;background:#fef2f2;color:#dc2626;cursor:pointer;flex-shrink:0;">✕ 추출 취소</button>
             </div>
-            <div id="extract-pages" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px;"></div>
+            <div id="extract-pages" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px;"></div>
         `;
+        modalBody.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;';
         document.getElementById('modal-buttons').style.display = 'none';
         document.getElementById('result-modal').style.display = 'flex';
 
@@ -2580,7 +2585,8 @@
         border: 1px solid #e5e7eb;
         border-radius: 6px;
         padding: 10px;
-        font-size: 13px;
+        font-family: inherit;
+        font-size: 14px;
         line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;

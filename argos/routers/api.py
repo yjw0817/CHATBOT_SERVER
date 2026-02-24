@@ -274,7 +274,13 @@ def list_documents(apt_id: Optional[str] = None):
 # ============ STEP 2: EXTRACT TEXT ============
 
 VISION_PROMPT = "이 이미지를 한국어로 자세히 설명해줘. UI 화면이라면 어떤 기능의 화면인지, 버튼/메뉴/입력 필드 등 구성 요소를 포함해서 설명해. 마크다운 헤딩(###, ##, #)을 절대 사용하지 마. 일반 문장으로만 설명해."
-VISION_OCR_PROMPT = "이 이미지의 모든 텍스트를 정확히 읽어서 그대로 출력해. 내용을 해석하거나 요약하지 말고 텍스트만 추출해. 마크다운 헤딩(###, ##, #)을 절대 사용하지 마."
+VISION_OCR_PROMPT = """이 이미지의 내용을 다음 규칙에 따라 출력해줘.
+
+1. 텍스트는 모두 정확히 그대로 추출해줘. 수정·요약·해석 금지.
+2. 도표·조직도·플로우차트·그림·다이어그램이 있으면 아래 형식으로 추가해줘:
+[참고: (구조, 관계, 흐름을 간결하게 설명)]
+3. 텍스트와 시각 요소가 섞여 있으면 등장 순서대로 출력해줘.
+4. 마크다운 헤딩(###, ##, #)을 절대 사용하지 마."""
 
 
 def _render_page_pypdfium2(pdf_path: str, page_num: int, dpi: int = 200) -> str:
@@ -692,6 +698,16 @@ def cancel_manualize(doc_id: str):
 
 # ============ STEP 2: MANUALIZE ============
 
+MANUALIZE_VISUAL_INSTRUCTION = """\
+아래 원문에는 [참고: ...] 형식의 시각 자료 설명이 포함되어 있을 수 있습니다.
+
+[참고: ...] 처리 규칙:
+- 해당 내용을 적극 활용하여 섹션의 내용을 더 풍부하고 정확하게 작성하세요.
+- 단, [참고: ...] 태그는 최종 매뉴얼 출력에 절대 포함하지 마세요.
+- 시각 자료의 핵심 정보(구조·흐름·관계)를 매뉴얼 문체로 재구성하여 bullets 또는 content에 녹여 쓰세요.
+
+"""
+
 MANUALIZE_PROMPT = """당신은 영업/운영 문서를 RAG(검색 기반 답변)에 넣기 위한
 "구조화된 정보 추출기"입니다.
 
@@ -998,7 +1014,7 @@ def manualize(doc_id: str, force: bool = False):
 
 def _manualize_single(raw_text: str, doc_id: str) -> dict:
     """Single LLM call with full raw_text. Returns {section_name: {"text": ..., "source_anchor": ...}}."""
-    content = call_llm(MANUALIZE_PROMPT.format(raw_text=raw_text), temperature=0.3)
+    content = call_llm(MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_text), temperature=0.3)
     if not content:
         raise Exception("LLM 응답이 비어있습니다.")
 
@@ -1077,7 +1093,7 @@ def _process_one_window(window_text: str, idx: int, total: int) -> dict:
     fallback = {fallback_name: {"text": window_text, "source_anchor": ""}}
 
     try:
-        content = call_llm(MANUALIZE_PROMPT.format(raw_text=window_text), temperature=0.3)
+        content = call_llm(MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=window_text), temperature=0.3)
         if not content:
             print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
             return fallback
