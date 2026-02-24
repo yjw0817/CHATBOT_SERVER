@@ -876,7 +876,7 @@ def manualize(doc_id: str, force: bool = False):
 
     # Check if manual sections already exist (return cached if not forced)
     if not force:
-        cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+        cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
         existing = cursor.fetchall()
         if existing:
             sections = {row["section_name"]: row["section_text"] for row in existing}
@@ -949,9 +949,9 @@ def manualize(doc_id: str, force: bool = False):
         cursor.execute(
             """INSERT INTO manual_sections
                (section_id, doc_id, section_name, section_text, ai_text,
-                gate_status, gate_score, gate_reasons_json, gate_stale)
-               VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, 0)""",
-            (section_id, doc_id, section_name, text_val, text_val)
+                gate_status, gate_score, gate_reasons_json, gate_stale, sort_order)
+               VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, 0, %s)""",
+            (section_id, doc_id, section_name, text_val, text_val, sec_counter)
         )
 
     cursor.execute("UPDATE documents SET updated_at = %s WHERE doc_id = %s",
@@ -1283,10 +1283,11 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
         cursor.execute(
             """INSERT INTO manual_sections
                (section_id, doc_id, section_name, section_text,
-                source_chunk_id, evidence_json, merge_status)
-               VALUES (%s, %s, %s, %s, %s, %s, 'BODY')""",
+                source_chunk_id, evidence_json, merge_status, sort_order)
+               VALUES (%s, %s, %s, %s, %s, %s, 'BODY', %s)""",
             (section_id, doc_id, section_name, section_text,
-             chunk_id, json.dumps(evidence, ensure_ascii=False))
+             chunk_id, json.dumps(evidence, ensure_ascii=False),
+             chunk["chunk_index"])
         )
 
     cursor.execute("UPDATE documents SET updated_at = %s WHERE doc_id = %s",
@@ -1344,6 +1345,7 @@ def manualize_batch_endpoint(doc_id: str, batch_id: str):
 
     # Build chunk_id → raw_chunk map for evidence indexing
     chunk_map = {c["chunk_id"]: c["raw_chunk"] for c in all_chunks}
+    chunk_index_map = {c["chunk_id"]: c["chunk_index"] for c in all_chunks}
 
     # Save each result to manual_sections
     saved = []
@@ -1392,10 +1394,11 @@ def manualize_batch_endpoint(doc_id: str, batch_id: str):
             cursor.execute(
                 """INSERT INTO manual_sections
                    (section_id, doc_id, section_name, section_text,
-                    source_chunk_id, evidence_json, merge_status)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'BODY')""",
+                    source_chunk_id, evidence_json, merge_status, sort_order)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'BODY', %s)""",
                 (section_id, doc_id, section_name, section_text,
-                 chunk_id, json.dumps(indexed_spans, ensure_ascii=False)))
+                 chunk_id, json.dumps(indexed_spans, ensure_ascii=False),
+                 chunk_index_map.get(chunk_id, 0)))
 
         evidence_matched = sum(1 for s in indexed_spans if s.get("char_start", -1) >= 0)
         saved.append({
@@ -1788,7 +1791,7 @@ def gate_all(doc_id: str):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT section_name FROM manual_sections WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT section_name FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     sections = cursor.fetchall()
     if not sections:
         conn.close()
@@ -1838,7 +1841,7 @@ def fill_all(doc_id: str):
     raw_text = doc["raw_text"] or ""
     raw_text_safe = raw_text[:4000] if raw_text else "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
 
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     all_sections = cursor.fetchall()
     if not all_sections:
         conn.close()
@@ -1894,7 +1897,7 @@ def refine_all(doc_id: str):
     raw_text = doc["raw_text"] or ""
     raw_text_safe = raw_text[:4000] if raw_text else "(원본 없음)"
 
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     all_sections = cursor.fetchall()
     if not all_sections:
         conn.close()
@@ -2077,8 +2080,8 @@ def quality_gate(doc_id: str):
     """Run quality checks on manual sections."""
     conn = get_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+
+    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     sections = cursor.fetchall()
     if not sections:
         conn.close()
@@ -2971,7 +2974,7 @@ def approve(doc_id: str):
         raise HTTPException(status_code=400, detail=f"Cannot approve: {red_count} RED issues open")
 
     # Check evidence span indexing failures (non-PII spans with char_start=-1)
-    cursor.execute("SELECT section_name, evidence_json FROM manual_sections WHERE doc_id = %s AND evidence_json IS NOT NULL", (doc_id,))
+    cursor.execute("SELECT section_name, evidence_json FROM manual_sections WHERE doc_id = %s AND evidence_json IS NOT NULL ORDER BY sort_order, section_id", (doc_id,))
     evidence_failures = []
     for row in cursor.fetchall():
         try:
@@ -3009,7 +3012,7 @@ def publish_all(doc_id: str):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT section_name, section_text, gate_status FROM manual_sections WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT section_name, section_text, gate_status FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     all_sections = cursor.fetchall()
     if not all_sections:
         conn.close()
@@ -3109,8 +3112,8 @@ def reindex(doc_id: str):
     """Chunk manual sections for RAG retrieval."""
     conn = get_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+
+    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     sections = cursor.fetchall()
     if not sections:
         conn.close()
@@ -3186,7 +3189,8 @@ def get_sections(doc_id: str):
     cursor = conn.cursor()
     cursor.execute("""SELECT section_name, section_text, gate_status, gate_reasons_json, gate_stale,
                              evidence_json, source_chunk_id, merge_status
-                      FROM manual_sections WHERE doc_id = %s""", (doc_id,))
+                      FROM manual_sections WHERE doc_id = %s
+                      ORDER BY sort_order, section_id""", (doc_id,))
     sections = [dict(row) for row in cursor.fetchall()]
     # Include document-level completed_phases
     cursor.execute("SELECT completed_phases FROM documents WHERE doc_id = %s", (doc_id,))
@@ -3285,7 +3289,7 @@ def get_source_map(doc_id: str):
         conn.close()
         raise HTTPException(status_code=404, detail="Document not found")
 
-    cursor.execute("SELECT section_name, source_chunk_id, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT section_name, source_chunk_id, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     sections = cursor.fetchall()
     conn.close()
 
@@ -3745,9 +3749,9 @@ def extract_api_spec(doc_id: str):
     """Extract API specifications from document."""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     # Get sections
-    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s", (doc_id,))
+    cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     sections = cursor.fetchall()
     
     # Get API_NEEDED issues

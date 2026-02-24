@@ -111,6 +111,7 @@ def init_db():
         ("manual_sections", ("evidence_json", "TEXT DEFAULT NULL")),
         ("manual_sections", ("merge_status", "VARCHAR(20) DEFAULT NULL")),
         ("manual_sections", ("ai_text", "LONGTEXT DEFAULT NULL")),
+        ("manual_sections", ("sort_order", "INT DEFAULT 0")),
         # documents migrations
         ("documents", ("manualize_json", "LONGTEXT DEFAULT NULL")),
         ("documents", ("raw_text_hash", "VARCHAR(64) DEFAULT NULL")),
