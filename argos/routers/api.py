@@ -19,7 +19,7 @@ UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 # Import unified LLM client
-from llm_client import call_llm, is_llm_available, get_llm_info, LLM_MODEL, set_llm_mode, get_llm_mode, set_llm_model, get_llm_model, ping_llm, call_vision_llm
+from llm_client import call_llm, is_llm_available, get_llm_info, LLM_MODEL, set_llm_mode, get_llm_mode, set_llm_model, get_llm_model, ping_llm, call_vision_llm, is_llm_locked, set_llm_lock
 
 # Import RAG index (FAISS + embedding)
 import numpy as np
@@ -36,6 +36,19 @@ def debug_llm():
         "env_LLM_PROVIDER": os.getenv("LLM_PROVIDER"),
         "env_LLM_API_KEY_set": bool(os.getenv("LLM_API_KEY"))
     }
+
+
+@router.get("/llm/lock")
+def get_lock():
+    """Get current LLM lock state."""
+    return {"locked": is_llm_locked()}
+
+
+@router.post("/llm/lock")
+def toggle_lock(locked: bool = Form(...)):
+    """Set LLM lock state."""
+    set_llm_lock(locked)
+    return {"success": True, "locked": is_llm_locked()}
 
 
 @router.get("/llm/mode")
@@ -71,6 +84,8 @@ def _fetch_model_list() -> list[dict]:
 @router.post("/llm/mode")
 def switch_mode(mode: str = Form(...)):
     """Switch LLM mode at runtime. Returns model list for the new mode."""
+    if is_llm_locked():
+        raise HTTPException(status_code=403, detail="LLM 설정이 잠겨 있습니다.")
     try:
         set_llm_mode(mode)
         models = _fetch_model_list()
@@ -88,6 +103,8 @@ def get_model():
 @router.post("/llm/model")
 def switch_model(model: str = Form(...)):
     """Switch LLM model at runtime."""
+    if is_llm_locked():
+        raise HTTPException(status_code=403, detail="LLM 설정이 잠겨 있습니다.")
     set_llm_model(model)
     return {"success": True, "model": get_llm_model(), "info": get_llm_info()}
 
@@ -239,10 +256,11 @@ async def upload_document(
     raw_text = f"[Placeholder: extract text first]"
     
     now = datetime.now().isoformat()
+    file_size = len(content)
     cursor.execute("""
-        INSERT INTO documents (doc_id, apt_id, title, source_filename, source_type, content_hash, raw_text, version, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s, %s)
-    """, (doc_id, apt_id, filename, filename, source_type, content_hash, raw_text, new_version, now, now))
+        INSERT INTO documents (doc_id, apt_id, title, source_filename, source_type, content_hash, raw_text, file_size, version, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s, %s)
+    """, (doc_id, apt_id, filename, filename, source_type, content_hash, raw_text, file_size, new_version, now, now))
     
     conn.commit()
     conn.close()
@@ -699,12 +717,17 @@ def cancel_manualize(doc_id: str):
 # ============ STEP 2: MANUALIZE ============
 
 MANUALIZE_VISUAL_INSTRUCTION = """\
-아래 원문에는 [참고: ...] 형식의 시각 자료 설명이 포함되어 있을 수 있습니다.
+아래 원문에는 시각 자료 설명이 포함되어 있을 수 있습니다.
+- [참고: ...] 형식: 도표·다이어그램 등 시각 요소의 구조/관계 설명
+- [이미지 설명: ...] 형식: UI 화면·도면·캡처 등 이미지의 화면 구성 설명
 
-[참고: ...] 처리 규칙:
-- 해당 내용을 적극 활용하여 섹션의 내용을 더 풍부하고 정확하게 작성하세요.
-- 단, [참고: ...] 태그는 최종 매뉴얼 출력에 절대 포함하지 마세요.
-- 시각 자료의 핵심 정보(구조·흐름·관계)를 매뉴얼 문체로 재구성하여 bullets 또는 content에 녹여 쓰세요.
+처리 규칙:
+- [이미지 설명: ...] 안의 내용은 실제 화면의 레이아웃·메뉴·버튼·입력 필드·동작 흐름을 설명합니다.
+  이 정보를 활용하여 "화면 구성", "주요 기능", "조작 방법" 등을 매뉴얼 문체로 서술하세요.
+- [참고: ...] 안의 내용은 도표·흐름도의 구조/관계를 설명합니다. 이를 bullets로 정리하세요.
+- 단, [참고: ...] 및 [이미지 설명: ...] 태그 자체는 최종 매뉴얼 출력에 절대 포함하지 마세요.
+  (예: "[이미지 설명:" 또는 "[참고:" 로 시작하는 텍스트가 출력에 남으면 안 됩니다)
+- 시각 자료의 핵심 정보(구조·흐름·관계·기능)를 매뉴얼 문체로 재구성하여 bullets 또는 content에 녹여 쓰세요.
 
 """
 

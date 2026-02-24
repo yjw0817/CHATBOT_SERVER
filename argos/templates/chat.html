@@ -16,6 +16,7 @@
         <select id="model-select">
             <option value="">-- 모델 로딩... --</option>
         </select>
+        <button id="chat-llm-lock" onclick="toggleChatLlmLock()" title="LLM 설정 잠금" style="padding:2px 8px;border-radius:12px;font-size:14px;border:1px solid #d1d5db;background:#fff;cursor:pointer;">🔓</button>
         <span id="model-badge" class="badge badge-pending" style="cursor:pointer;" title="현재 LLM 모델">loading...</span>
         <span id="status-badge" class="badge" style="display:none;"></span>
     </div>
@@ -156,7 +157,36 @@
         }
     }
 
+    // ── LLM Lock ──
+    let _chatLlmLocked = false;
+
+    function applyChatLockUI(locked) {
+        _chatLlmLocked = locked;
+        const btn = document.getElementById('chat-llm-lock');
+        if (btn) { btn.textContent = locked ? '🔒' : '🔓'; btn.style.background = locked ? '#fef3c7' : '#fff'; }
+        const btnL = document.getElementById('chat-btn-local');
+        const btnR = document.getElementById('chat-btn-remote');
+        const sel = document.getElementById('model-select');
+        if (btnL) { btnL.disabled = locked; btnL.style.opacity = locked ? '0.5' : '1'; }
+        if (btnR) { btnR.disabled = locked; btnR.style.opacity = locked ? '0.5' : '1'; }
+        if (sel) { sel.disabled = locked; sel.style.opacity = locked ? '0.5' : '1'; }
+    }
+
+    async function toggleChatLlmLock() {
+        const newState = !_chatLlmLocked;
+        try {
+            const res = await fetch('/api/llm/lock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `locked=${newState}`
+            });
+            const data = await res.json();
+            if (data.success) applyChatLockUI(data.locked);
+        } catch(e) { alert('잠금 설정 오류: ' + e.message); }
+    }
+
     async function switchChatMode(mode) {
+        if (_chatLlmLocked) { alert('LLM 설정이 잠겨 있습니다.'); return; }
         const btnL = document.getElementById('chat-btn-local');
         const btnR = document.getElementById('chat-btn-remote');
         if (btnL) btnL.disabled = true;
@@ -177,12 +207,12 @@
             }
         } catch(e) { alert('Mode 전환 오류: ' + e.message); }
         finally {
-            if (btnL) btnL.disabled = false;
-            if (btnR) btnR.disabled = false;
+            if (btnL) btnL.disabled = _chatLlmLocked;
+            if (btnR) btnR.disabled = _chatLlmLocked;
         }
     }
 
-    // Init: load mode + models
+    // Init: load mode + models + lock state
     (async function() {
         try {
             const res = await fetch('/api/llm/mode');
@@ -190,9 +220,15 @@
             updateChatModeUI(data.mode);
         } catch(e) {}
         await loadChatModelList();
+        try {
+            const res = await fetch('/api/llm/lock');
+            const data = await res.json();
+            applyChatLockUI(data.locked);
+        } catch(e) {}
     })();
 
     document.getElementById('model-select').addEventListener('change', function () {
+        if (_chatLlmLocked) { alert('LLM 설정이 잠겨 있습니다.'); this.value = localStorage.getItem('chat_model') || ''; return; }
         const model = this.value;
         localStorage.setItem('chat_model', model);
         document.getElementById('model-badge').textContent = model || 'default';

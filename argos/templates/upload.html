@@ -12,6 +12,7 @@
                 <option value="">모델 로딩...</option>
             </select>
             <span id="main-mode-info" style="color:#9ca3af;font-size:11px;"></span>
+            <button id="main-llm-lock" onclick="toggleLlmLock()" title="LLM 설정 잠금" style="padding:2px 8px;border-radius:12px;font-size:14px;border:1px solid #d1d5db;background:#fff;cursor:pointer;">🔓</button>
         </div>
     </div>
 
@@ -68,6 +69,7 @@
                 <th>아파트</th>
                 <th>문서명</th>
                 <th>버전</th>
+                <th>크기</th>
                 <th>상태</th>
                 <th>업로드일</th>
                 <th>작업</th>
@@ -79,6 +81,7 @@
                 <td>{{ doc.apt_name or doc.apt_id }}</td>
                 <td>{{ doc.title }}</td>
                 <td>v{{ doc.version }}</td>
+                <td style="font-size:12px;color:#6b7280;">{% if doc.file_size %}{% if doc.file_size >= 1048576 %}{{ '%.1f'|format(doc.file_size / 1048576) }}MB{% else %}{{ '%.0f'|format(doc.file_size / 1024) }}KB{% endif %}{% else %}-{% endif %}</td>
                 <td>
                     <span class="badge badge-{{ doc.status|lower }}">{{ doc.status }}</span>
                     {% if doc.has_rag %}<span class="rag-check" title="RAG 데이터화 완료">&#10003;</span>{% endif %}
@@ -140,6 +143,7 @@
                     <option value="">모델 로딩...</option>
                 </select>
                 <span id="llm-mode-info" style="color:#9ca3af;font-size:10px;"></span>
+                <button id="editor-llm-lock" onclick="toggleLlmLock()" title="LLM 설정 잠금" style="padding:2px 8px;border-radius:12px;font-size:14px;border:1px solid #d1d5db;background:#fff;cursor:pointer;">🔓</button>
                 <span id="manualize-status" class="manualize-lamp" style="display:none;">Manualizing</span>
                 <span id="manualize-timer" style="display:none;font-size:12px;color:#6b7280;font-variant-numeric:tabular-nums;">0.0s</span>
             </div>
@@ -267,6 +271,7 @@
     }
 
     async function switchLlmMode(mode) {
+        if (_llmLocked) { alert('LLM 설정이 잠겨 있습니다.'); return; }
         // Disable all mode buttons
         for (const ids of MODE_BTN_IDS) {
             const bL = document.getElementById(ids.local); if (bL) bL.disabled = true;
@@ -292,8 +297,8 @@
         } catch(e) { alert('Mode 전환 오류: ' + e.message); }
         finally {
             for (const ids of MODE_BTN_IDS) {
-                const bL = document.getElementById(ids.local); if (bL) bL.disabled = false;
-                const bR = document.getElementById(ids.remote); if (bR) bR.disabled = false;
+                const bL = document.getElementById(ids.local); if (bL) bL.disabled = _llmLocked;
+                const bR = document.getElementById(ids.remote); if (bR) bR.disabled = _llmLocked;
             }
         }
     }
@@ -317,6 +322,7 @@
     // Model select change handler (shared for both selects)
     function _onModelSelectChange(e) {
         if (!e.target.value) return;
+        if (_llmLocked) { alert('LLM 설정이 잠겨 있습니다.'); e.target.value = localStorage.getItem('editor_model') || ''; return; }
         const model = e.target.value;
         localStorage.setItem('editor_model', model);
         // Sync the other select
@@ -331,6 +337,51 @@
         if (sel) sel.addEventListener('change', _onModelSelectChange);
     }
 
+    // ── LLM Lock ──
+    const LOCK_BTN_IDS = ['main-llm-lock', 'editor-llm-lock'];
+    let _llmLocked = false;
+
+    function applyLockUI(locked) {
+        _llmLocked = locked;
+        const icon = locked ? '🔒' : '🔓';
+        const bg = locked ? '#fef3c7' : '#fff';
+        for (const id of LOCK_BTN_IDS) {
+            const btn = document.getElementById(id);
+            if (btn) { btn.textContent = icon; btn.style.background = bg; }
+        }
+        for (const ids of MODE_BTN_IDS) {
+            const bL = document.getElementById(ids.local);
+            const bR = document.getElementById(ids.remote);
+            if (bL) { bL.disabled = locked; if (locked) bL.style.opacity = '0.5'; else bL.style.opacity = '1'; }
+            if (bR) { bR.disabled = locked; if (locked) bR.style.opacity = '0.5'; else bR.style.opacity = '1'; }
+        }
+        for (const selId of MODEL_SELECT_IDS) {
+            const sel = document.getElementById(selId);
+            if (sel) { sel.disabled = locked; if (locked) sel.style.opacity = '0.5'; else sel.style.opacity = '1'; }
+        }
+    }
+
+    async function toggleLlmLock() {
+        const newState = !_llmLocked;
+        try {
+            const res = await fetch('/api/llm/lock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `locked=${newState}`
+            });
+            const data = await res.json();
+            if (data.success) applyLockUI(data.locked);
+        } catch(e) { alert('잠금 설정 오류: ' + e.message); }
+    }
+
+    async function loadLockState() {
+        try {
+            const res = await fetch('/api/llm/lock');
+            const data = await res.json();
+            applyLockUI(data.locked);
+        } catch(e) {}
+    }
+
     // On page load
     document.addEventListener('DOMContentLoaded', async () => {
         try {
@@ -339,6 +390,7 @@
             updateModeUI(data.mode, data.info);
         } catch(e) {}
         await loadModelList();
+        await loadLockState();
     });
 
     async function manualize(docId, force = false) {

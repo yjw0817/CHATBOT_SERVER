@@ -16,11 +16,28 @@ print(f"[LLM_CLIENT] LLM_ENABLED={os.getenv('LLM_ENABLED')}, LLM_PROVIDER={os.ge
 _runtime_mode: Optional[str] = None
 # Runtime model override (None = use env)
 _runtime_model: Optional[str] = None
+# Runtime lock state
+_runtime_locked: bool = os.getenv("LLM_LOCKED", "false").lower() == "true"
+
+
+def is_llm_locked() -> bool:
+    """Return current LLM lock state."""
+    return _runtime_locked
+
+
+def set_llm_lock(locked: bool):
+    """Set LLM lock state. When locked, mode/model changes are rejected."""
+    global _runtime_locked
+    _runtime_locked = locked
+    _update_env_value("LLM_LOCKED", "true" if locked else "false")
+    print(f"[LLM_CLIENT] Lock {'ENABLED' if locked else 'DISABLED'} (persisted to .env)")
 
 
 def set_llm_mode(mode: str):
     """Set LLM mode at runtime. 'local' or 'remote'. Also persists to .env."""
     global _runtime_mode
+    if _runtime_locked:
+        raise RuntimeError("LLM 설정이 잠겨 있습니다. 잠금을 해제한 후 변경하세요.")
     if mode not in ("local", "remote"):
         raise ValueError(f"Invalid mode: {mode}. Must be 'local' or 'remote'.")
     _runtime_mode = mode
@@ -56,6 +73,8 @@ def get_llm_mode() -> str:
 def set_llm_model(model: str):
     """Set LLM model at runtime."""
     global _runtime_model
+    if _runtime_locked:
+        raise RuntimeError("LLM 설정이 잠겨 있습니다. 잠금을 해제한 후 변경하세요.")
     _runtime_model = model
     print(f"[LLM_CLIENT] Model switched to: {model}")
 
