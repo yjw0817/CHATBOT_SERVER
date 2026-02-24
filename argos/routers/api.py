@@ -1419,7 +1419,7 @@ def manualize_batch_endpoint(doc_id: str, batch_id: str):
             else:
                 result = {
                     "section_name": item["section_title"] or f"Chunk {chunk_id}",
-                    "section_text": item["section_text"][:3000],
+                    "section_text": item["section_text"][:10000],
                     "evidence_spans": [],
                 }
 
@@ -1718,15 +1718,15 @@ def _gate_section_internal(doc_id: str, section_name: str, cursor, raw_text_fall
         cursor.execute("SELECT raw_chunk FROM doc_chunks WHERE chunk_id = %s", (sec["source_chunk_id"],))
         chunk_row = cursor.fetchone()
         if chunk_row and chunk_row["raw_chunk"]:
-            raw_reference = chunk_row["raw_chunk"][:4000]
+            raw_reference = chunk_row["raw_chunk"][:15000]
 
     if not raw_reference:
         if raw_text_fallback is not None:
-            raw_reference = raw_text_fallback[:4000]
+            raw_reference = raw_text_fallback[:15000]
         else:
             cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
             doc = cursor.fetchone()
-            raw_reference = (doc["raw_text"] or "")[:4000] if doc else ""
+            raw_reference = (doc["raw_text"] or "")[:15000] if doc else ""
 
     # Detect user edits: diff section_text vs ai_text
     user_edits_note = ""
@@ -1763,7 +1763,7 @@ def _gate_section_internal(doc_id: str, section_name: str, cursor, raw_text_fall
     if is_llm_available():
         try:
             prompt_text = GATE_CHECK_PROMPT.format(
-                section_text=section_text[:3000],
+                section_text=section_text[:10000],
                 raw_text=raw_reference
             ) + user_edits_note + dismissed_note
             print(f"[GATE_SECTION] calling LLM for '{section_name}' (user_edits_note: {len(user_edits_note)} chars, dismissed: {len(prev_dismissed)})")
@@ -1895,7 +1895,7 @@ def fill_all(doc_id: str):
         conn.close()
         raise HTTPException(status_code=404, detail="Document not found")
     raw_text = doc["raw_text"] or ""
-    raw_text_safe = raw_text[:4000] if raw_text else "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
+    raw_text_safe = raw_text[:15000] if raw_text else "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
 
     cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     all_sections = cursor.fetchall()
@@ -1951,7 +1951,7 @@ def refine_all(doc_id: str):
         conn.close()
         raise HTTPException(status_code=404, detail="Document not found")
     raw_text = doc["raw_text"] or ""
-    raw_text_safe = raw_text[:4000] if raw_text else "(원본 없음)"
+    raw_text_safe = raw_text[:15000] if raw_text else "(원본 없음)"
 
     cursor.execute("SELECT section_name, section_text FROM manual_sections WHERE doc_id = %s ORDER BY sort_order, section_id", (doc_id,))
     all_sections = cursor.fetchall()
@@ -2547,7 +2547,7 @@ def _conservative_dedup(sections: list) -> list:
 
 # ============ BATCH MANUALIZE ============
 
-MAX_BATCH_CHARS = 12000
+MAX_BATCH_CHARS = 30000
 
 MANUALIZE_BATCH_PROMPT = """당신은 'Manualize 배치 실행기'입니다.
 중요: 아래 [MANUALIZE_RULES]의 규칙을 **그대로 준수**하여 작업하세요.
@@ -2730,7 +2730,7 @@ def _manualize_batch(batch: dict, doc_id: str) -> list:
         fallback.append({
             "item_id": it["item_id"],
             "section_name": it["section_title"] or f"[미처리] {it['item_id']}",
-            "section_text": it["section_text"][:3000],
+            "section_text": it["section_text"][:10000],
             "evidence_spans": [],
         })
     return fallback
@@ -2786,7 +2786,7 @@ def _manualize_chunk(chunk: dict, doc_id: str) -> dict:
     for attempt in range(2):
         try:
             content = call_llm(
-                MANUALIZE_CHUNK_PROMPT.format(raw_chunk=raw_chunk[:10000]),
+                MANUALIZE_CHUNK_PROMPT.format(raw_chunk=raw_chunk[:30000]),
                 temperature=0.3
             )
             if content:
@@ -2815,7 +2815,7 @@ def _manualize_chunk(chunk: dict, doc_id: str) -> dict:
     # Both attempts failed — return raw chunk as-is
     return {
         "section_name": f"[미처리] Chunk-{chunk.get('chunk_index', 0)}",
-        "section_text": raw_chunk[:3000],
+        "section_text": raw_chunk[:10000],
         "source_anchor": "",
         "evidence_spans": [],
         "chunk_id": chunk_id,
@@ -2832,8 +2832,8 @@ def _gate_chunk(section_text: str, raw_chunk: str) -> dict:
 
     try:
         content = call_llm(GATE_CHECK_PROMPT.format(
-            section_text=section_text[:3000],
-            raw_text=raw_chunk[:4000]
+            section_text=section_text[:10000],
+            raw_text=raw_chunk[:15000]
         ), temperature=0.3)
         if content:
             gm = re.search(r'\{[\s\S]*\}', content)
@@ -2979,7 +2979,7 @@ def refine_text(doc_id: str, req: RefineRequest):
 
     raw_text = ""
     if doc and doc["raw_text"]:
-        raw_text = doc["raw_text"][:4000]
+        raw_text = doc["raw_text"][:15000]
 
     raw_text_safe = raw_text or "(원본 문서를 찾을 수 없습니다. 기존 텍스트만 참고하세요.)"
 
@@ -3970,7 +3970,7 @@ def extract_api_spec(doc_id: str):
     if is_llm_available():
         try:
             prompt = API_SPEC_PROMPT.format(
-                sections_text=sections_text[:4000],
+                sections_text=sections_text[:15000],
                 api_issues=", ".join(api_issues)
             )
             content = call_llm(prompt, temperature=0.3)
