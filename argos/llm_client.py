@@ -183,7 +183,7 @@ def _call_ollama(prompt: str, temperature: float, config: dict) -> Optional[str]
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": 65536,
-        "options": {"num_ctx": 131072},
+        "options": {"num_ctx": 262144},
     }
     import time as _time
     mode_label = config.get("mode", "?")
@@ -275,7 +275,7 @@ def call_vision_llm(prompt: str, image_base64: str, model: str = "qwen3-vl:235b-
         }],
         "stream": False,
         "think": False,
-        "options": {"num_ctx": 131072}
+        "options": {"num_ctx": 262144}
     }
     import time as _time
     print(f"[VISION_LLM] START model={model} image_size={len(image_base64)} prompt={prompt[:50]}...")
