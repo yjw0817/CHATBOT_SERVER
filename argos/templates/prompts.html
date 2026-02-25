@@ -298,6 +298,7 @@
         btn.textContent = '처리 중...';
         status.textContent = 'LLM 응답 대기 중...';
         resultEl.style.display = 'none';
+        const startTime = performance.now();
 
         try {
             const body = new URLSearchParams();
@@ -305,14 +306,15 @@
             body.append('prompt_text', promptText);
             body.append('raw_text', rawText);
             const resp = await fetch('/api/llm/prompts/test', { method: 'POST', body });
+            const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
             const data = await resp.json();
             if (!resp.ok) {
-                status.textContent = '오류: ' + (data.detail || resp.statusText);
+                status.textContent = `오류 (${elapsed}초): ` + (data.detail || resp.statusText);
                 return;
             }
             resultEl.textContent = data.result;
             resultEl.style.display = 'block';
-            status.textContent = `완료 (${data.result.length.toLocaleString()}자)`;
+            status.textContent = `완료 — ${elapsed}초, ${data.result.length.toLocaleString()}자`;
         } catch (e) {
             status.textContent = '요청 실패: ' + e.message;
         } finally {
