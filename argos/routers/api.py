@@ -199,6 +199,14 @@ def test_prompt(step: str = Form(...), prompt_text: str = Form(...), raw_text: s
     content = call_llm(formatted, temperature=0.3)
     if not content:
         raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")
+
+    # 디버그: LLM 원본 응답을 파일로 저장
+    log_dir = Path(__file__).parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / "prompt_test_response.txt"
+    log_file.write_text(content, encoding="utf-8")
+    print(f"[PROMPT_TEST] 응답 저장: {log_file} ({len(content)}자)")
+
     return {"result": content}
 
 
