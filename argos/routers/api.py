@@ -2481,6 +2481,11 @@ def manualize_section(doc_id: str, req: ManualizeSectionRequest):
             prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_window)
 
         print(f"[MANUALIZE-SECTION] '{req.section_name}' raw_window={len(raw_window)} chars")
+        # 디버그: 실제 프롬프트 저장
+        import pathlib
+        pathlib.Path("argos/logs").mkdir(exist_ok=True)
+        pathlib.Path("argos/logs/last_manualize_section_prompt.txt").write_text(prompt, encoding="utf-8")
+        print(f"[MANUALIZE-SECTION] prompt saved to argos/logs/last_manualize_section_prompt.txt ({len(prompt)} chars)")
         content = call_llm(prompt, temperature=0.3)
         if not content:
             raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")
