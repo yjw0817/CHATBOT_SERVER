@@ -225,7 +225,7 @@ def test_prompt(step: str = Form(...), prompt_text: str = Form(...), raw_text: s
 
 
 def _format_test_node(node, lines: list, depth: int):
-    """재귀적으로 LLM JSON 응답을 읽기 좋은 텍스트로 변환."""
+    """재귀적으로 LLM JSON 응답을 RAG에 적합한 마크다운 형태로 변환."""
     if isinstance(node, str):
         lines.append(node)
         return
@@ -236,33 +236,38 @@ def _format_test_node(node, lines: list, depth: int):
     if not isinstance(node, dict):
         return
 
+    # depth 0: # doc_title, depth 1: ## section name, depth 2: ### rule title
     heading = node.get("doc_title") or node.get("name") or node.get("title") or ""
     if heading:
-        mark = "━━━" if depth == 0 else "───" if depth == 1 else "•"
-        end_mark = f" {mark}" if depth <= 1 else ""
-        lines.append(f"{mark} {heading}{end_mark}")
+        prefix = "#" * min(depth + 1, 4)
+        rule_id = node.get("rule_id", "")
+        label = f"{rule_id}. {heading}" if rule_id else heading
+        lines.append(f"{prefix} {label}")
+        lines.append("")
     if node.get("summary"):
-        lines.append(node["summary"] + "\n")
+        lines.append(f"> {node['summary']}")
+        lines.append("")
     if node.get("text"):
         lines.append(node["text"])
+        lines.append("")
     if node.get("bullets"):
         for b in node["bullets"]:
             if isinstance(b, str):
-                lines.append(f"  • {b}")
+                lines.append(f"- {b}")
             else:
                 _format_test_node(b, lines, depth + 1)
         lines.append("")
-    # structured → condition/procedure만 표시
+    # structured → condition/procedure/exceptions
     if node.get("structured"):
         s = node["structured"]
         if s.get("condition"):
-            lines.append(f"  [조건] {s['condition']}")
+            lines.append(f"**조건:** {s['condition']}")
         if s.get("procedure"):
             for i, p in enumerate(s["procedure"], 1):
-                lines.append(f"  {i}. {p}")
+                lines.append(f"{i}. {p}")
         if s.get("exceptions"):
             for ex in s["exceptions"]:
-                lines.append(f"  ⚠ {ex}")
+                lines.append(f"- ⚠ {ex}")
         lines.append("")
 
     skip = {"doc_title", "name", "title", "summary", "text", "bullets",
