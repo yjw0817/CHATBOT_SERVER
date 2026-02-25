@@ -882,7 +882,19 @@
         const originalText = textarea.value;
         const btn = document.getElementById(`btn-manualize-${idx}`);
 
-        if (!confirm(`"${sectionName}" 섹션을 AI로 다시 구조화합니다. 계속하시겠습니까?`)) return;
+        // [임시] preview: LLM에 보낼 원본 영역을 먼저 확인
+        try {
+            const prevRes = await fetch(`/api/doc/${currentDocId}/manualize-section`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section_name: sectionName, text: originalText, preview: true })
+            });
+            const prev = await prevRes.json();
+            if (!prevRes.ok) { alert('미리보기 실패: ' + (prev.detail || '오류')); return; }
+
+            const info = `[섹션] ${sectionName}\n[anchor] ${prev.anchor || '(없음)'}\n[anchor 매칭] ${prev.anchor_found ? '✅ 성공' : '❌ 실패'}\n[원본 영역 길이] ${prev.raw_window_len}자\n\n──── 보낼 원본 내용 (앞 2000자) ────\n${(prev.raw_window || '').substring(0, 2000)}`;
+            if (!confirm(info + '\n\n이 내용으로 Manualize를 진행하시겠습니까?')) return;
+        } catch(e) { alert('미리보기 실패: ' + e.message); return; }
 
         // 타이머
         const t0 = Date.now();

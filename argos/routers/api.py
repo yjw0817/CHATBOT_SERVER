@@ -2457,6 +2457,7 @@ def update_sections(doc_id: str, req: SectionsUpdate):
 class ManualizeSectionRequest(BaseModel):
     section_name: str
     text: str  # 현재 섹션 텍스트 (프론트에서 전달)
+    preview: bool = False  # True이면 LLM 호출 없이 보낼 원본 영역만 반환
 
 
 @router.post("/doc/{doc_id}/manualize-section")
@@ -2501,6 +2502,17 @@ def manualize_section(doc_id: str, req: ManualizeSectionRequest):
     if not raw_window:
         # 폴백: raw_text 앞부분 (전체 문서 보내면 느려지므로 제한)
         raw_window = raw_text[:15000]
+
+    # preview 모드: LLM 호출 없이 보낼 내용만 반환
+    if req.preview:
+        return {
+            "success": True, "preview": True,
+            "section_name": req.section_name,
+            "anchor": anchor,
+            "anchor_found": bool(anchor and len(anchor) >= 10 and raw_text.find(anchor) != -1),
+            "raw_window": raw_window,
+            "raw_window_len": len(raw_window),
+        }
 
     # 3) LLM 호출 — 원본 raw_text 영역을 manualize 프롬프트에 전달
     try:
