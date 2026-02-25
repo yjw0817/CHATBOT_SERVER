@@ -296,9 +296,12 @@
         const resultEl = document.getElementById('test-result');
         btn.disabled = true;
         btn.textContent = '처리 중...';
-        status.textContent = 'LLM 응답 대기 중...';
         resultEl.style.display = 'none';
         const startTime = performance.now();
+        const timer = setInterval(() => {
+            const sec = ((performance.now() - startTime) / 1000).toFixed(1);
+            status.textContent = `LLM 응답 대기 중... ${sec}초`;
+        }, 100);
 
         try {
             const body = new URLSearchParams();
@@ -306,24 +309,39 @@
             body.append('prompt_text', promptText);
             body.append('raw_text', rawText);
             const resp = await fetch('/api/llm/prompts/test', { method: 'POST', body });
+            clearInterval(timer);
             const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
             const data = await resp.json();
             if (!resp.ok) {
                 status.textContent = `오류 (${elapsed}초): ` + (data.detail || resp.statusText);
                 return;
             }
-            // JSON이면 pretty-print
+            // JSON → 섹션별 읽기 좋은 형태로 변환
             let display = data.result;
             try {
                 const jsonMatch = data.result.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
-                    display = JSON.stringify(JSON.parse(jsonMatch[0]), null, 2);
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    const lines = [];
+                    for (const [key, val] of Object.entries(parsed)) {
+                        lines.push(`━━━ ${key} ━━━`);
+                        if (val && typeof val === 'object' && val.text) {
+                            lines.push(val.text);
+                        } else if (typeof val === 'string') {
+                            lines.push(val);
+                        } else {
+                            lines.push(JSON.stringify(val, null, 2));
+                        }
+                        lines.push('');
+                    }
+                    display = lines.join('\n');
                 }
             } catch(_) {}
             resultEl.textContent = display;
             resultEl.style.display = 'block';
             status.textContent = `완료 — ${elapsed}초, ${data.result.length.toLocaleString()}자`;
         } catch (e) {
+            clearInterval(timer);
             status.textContent = '요청 실패: ' + e.message;
         } finally {
             btn.disabled = false;
