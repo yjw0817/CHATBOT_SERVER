@@ -316,27 +316,7 @@
                 status.textContent = `오류 (${elapsed}초): ` + (data.detail || resp.statusText);
                 return;
             }
-            // JSON → 섹션별 읽기 좋은 형태로 변환
-            let display = data.result;
-            try {
-                const jsonMatch = data.result.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    const parsed = JSON.parse(jsonMatch[0]);
-                    const lines = [];
-                    for (const [key, val] of Object.entries(parsed)) {
-                        lines.push(`━━━ ${key} ━━━`);
-                        if (val && typeof val === 'object' && val.text) {
-                            lines.push(val.text);
-                        } else if (typeof val === 'string') {
-                            lines.push(val);
-                        } else {
-                            lines.push(JSON.stringify(val, null, 2));
-                        }
-                        lines.push('');
-                    }
-                    display = lines.join('\n');
-                }
-            } catch(_) {}
+            let display = _formatLLMResult(data.result);
             resultEl.textContent = display;
             resultEl.style.display = 'block';
             status.textContent = `완료 — ${elapsed}초, ${data.result.length.toLocaleString()}자`;
@@ -346,6 +326,49 @@
         } finally {
             btn.disabled = false;
             btn.textContent = '테스트';
+        }
+    }
+
+    // ---- Format LLM result ----
+    function _formatLLMResult(raw) {
+        try {
+            const jsonMatch = raw.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) return raw;
+            const obj = JSON.parse(jsonMatch[0]);
+            const lines = [];
+            _walkNode(obj, lines, 0);
+            const result = lines.join('\n').trim();
+            return result || raw;
+        } catch(_) { return raw; }
+    }
+
+    function _walkNode(node, lines, depth) {
+        if (typeof node === 'string') { lines.push(node); return; }
+        if (Array.isArray(node)) {
+            for (const item of node) _walkNode(item, lines, depth);
+            return;
+        }
+        if (!node || typeof node !== 'object') return;
+
+        const heading = node.doc_title || node.name || node.title || '';
+        if (heading) {
+            const mark = depth === 0 ? '━━━' : depth === 1 ? '───' : '•';
+            lines.push(`${mark} ${heading} ${depth <= 1 ? mark : ''}`);
+        }
+        if (node.summary) lines.push(node.summary + '\n');
+        if (node.text) lines.push(node.text);
+        if (node.bullets) {
+            for (const b of node.bullets) {
+                if (typeof b === 'string') lines.push(`  • ${b}`);
+                else _walkNode(b, lines, depth + 1);
+            }
+            lines.push('');
+        }
+        const skip = new Set(['doc_title','name','title','summary','text','bullets',
+                              'source_anchor','section_id','rule_id','doc_type','tags']);
+        for (const [k, v] of Object.entries(node)) {
+            if (skip.has(k)) continue;
+            if (Array.isArray(v) || (v && typeof v === 'object')) _walkNode(v, lines, depth + 1);
         }
     }
 
