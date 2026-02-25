@@ -769,7 +769,6 @@
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
                         <button class="btn-small" style="background:#94a3b8;color:white;font-size:11px;" onclick="toggleMoreBtns(${idx})">⋯ 더보기</button>
                         <span id="more-btns-${idx}" style="display:none; gap:0.25rem; align-items:center;">
-                            <button id="btn-manualize-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="manualizeSection(${idx})">▶ Manualize</button>
                             <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                             <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">② RAG 최적화</button>
                             <button id="btn-gate-${idx}" class="btn-small" style="background:#f59e0b;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
@@ -875,81 +874,6 @@
         manualize(currentDocId, true);
     }
 
-    async function manualizeSection(idx) {
-        const textarea = document.getElementById(`editor-${idx}`);
-        if (!textarea || !currentDocId) return;
-        const sectionName = textarea.dataset.sectionName;
-        const originalText = textarea.value;
-        const btn = document.getElementById(`btn-manualize-${idx}`);
-
-        // source-map에서 원본 가져오기 (원본 비교와 동일한 데이터)
-        const sm = await loadSourceMap();
-        const rawWindow = sm?.source_map?.[sectionName] || '';
-
-        // [임시] preview: 보낼 원본 확인
-        const info = `[섹션] ${sectionName}\n[원본 길이] ${rawWindow.length}자\n\n──── 보낼 원본 내용 (앞 2000자) ────\n${rawWindow.substring(0, 2000)}`;
-        if (!confirm(info + '\n\n이 내용으로 Manualize를 진행하시겠습니까?')) return;
-
-        // 타이머
-        const t0 = Date.now();
-        const timerIv = setInterval(() => {
-            const sec = (Date.now() - t0) / 1000;
-            const m = Math.floor(sec / 60);
-            const s = (sec % 60).toFixed(1);
-            if (btn) btn.textContent = `▶ Manualize 중... ${m > 0 ? m + ':' + s.padStart(4,'0') : s + 's'}`;
-        }, 100);
-
-        if (btn) { btn.disabled = true; btn.textContent = '▶ Manualize 중... 0.0s'; }
-        _markSectionWorking(idx, 'Manualize 중…');
-        textarea.value = "AI가 재구조화 중입니다...";
-        textarea.disabled = true;
-        autoResize(textarea);
-
-        try {
-            const res = await fetch(`/api/doc/${currentDocId}/manualize-section`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ section_name: sectionName, text: originalText, raw_window: rawWindow })
-            });
-            const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-            let result;
-            try { result = await res.json(); } catch(_) { result = { detail: `서버 오류 (HTTP ${res.status})` }; }
-
-            textarea.disabled = false;
-            if (res.ok && result.success) {
-                // 바로 텍스트 교체 (팝업 없음)
-                textarea.value = result.section_text;
-                autoResize(textarea);
-                // gate stale 표시
-                textarea.dataset.gateStatus = '';
-                const staleHint = document.querySelector(`#section-card-${idx} [style*="color:#d97706"]`);
-                if (!staleHint) {
-                    const card = document.getElementById(`section-card-${idx}`);
-                    if (card) {
-                        const hint = document.createElement('div');
-                        hint.style.cssText = 'font-size:12px;color:#d97706;margin-bottom:6px;';
-                        hint.textContent = '⚠️ 변경됨: Gate 재검증 필요';
-                        card.querySelector('.section-row')?.before(hint);
-                    }
-                }
-            } else {
-                textarea.value = originalText;
-                autoResize(textarea);
-                alert(`섹션 Manualize 실패 (${elapsed}s): ${result.detail || '알 수 없는 오류'}`);
-            }
-        } catch(e) {
-            textarea.disabled = false;
-            textarea.value = originalText;
-            autoResize(textarea);
-            alert('섹션 Manualize 실패: ' + e.message);
-        } finally {
-            clearInterval(timerIv);
-            if (btn) { btn.disabled = false; btn.textContent = '▶ Manualize'; }
-            const badge = document.getElementById(`phase-done-${idx}`);
-            if (badge) { badge.classList.remove('badge-working'); if (badge.textContent.includes('중…')) badge.style.display = 'none'; }
-        }
-    }
-
     function _appendSectionCard(name, text, idx) {
         const container = document.getElementById('editor-container');
         const secDiv = document.createElement('div');
@@ -967,7 +891,6 @@
                     <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
                     <button class="btn-small" style="background:#94a3b8;color:white;font-size:11px;" onclick="toggleMoreBtns(${idx})">⋯ 더보기</button>
                     <span id="more-btns-${idx}" style="display:none; gap:0.25rem; align-items:center;">
-                        <button id="btn-manualize-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="manualizeSection(${idx})">▶ Manualize</button>
                         <button id="btn-fill-${idx}" class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                         <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">② RAG 최적화</button>
                         <button id="btn-gate-${idx}" class="btn-small" style="background:#f59e0b;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
