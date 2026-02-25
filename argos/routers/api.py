@@ -2463,53 +2463,34 @@ class ManualizeSectionRequest(BaseModel):
 @router.post("/doc/{doc_id}/manualize-section")
 def manualize_section(doc_id: str, req: ManualizeSectionRequest):
     """Re-manualize a single section.
-    source_anchor 기반으로 원본 raw_text 영역을 찾아 LLM에 전달."""
-    if not is_llm_available():
+    source-map API와 동일한 로직으로 원본 raw_text 영역을 찾아 LLM에 전달."""
+    if not is_llm_available() and not req.preview:
         raise HTTPException(status_code=503, detail="LLM 사용 불가")
 
-    # 1) raw_text + source_anchor 조회 후 즉시 닫기
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
-    doc = cursor.fetchone()
-    if not doc or not doc["raw_text"]:
-        conn.close()
-        raise HTTPException(status_code=400, detail="원본 텍스트가 없습니다.")
-
+    # 1) source-map 호출 — 원본 비교와 완전히 동일한 매칭 결과 사용
     try:
-        cursor.execute(
-            "SELECT source_anchor FROM manual_sections WHERE doc_id = %s AND section_name = %s",
-            (doc_id, req.section_name))
-        sec_row = cursor.fetchone()
-    except Exception:
-        sec_row = None
-    conn.close()
-
-    raw_text = doc["raw_text"]
-    anchor = (sec_row["source_anchor"] or "") if sec_row else ""
-
-    # 2) source_anchor로 원본 영역 추출 (원본 비교와 동일한 로직)
-    raw_window = ""
-    if anchor and len(anchor) >= 10:
-        pos = raw_text.find(anchor)
-        if pos != -1:
-            start = max(0, pos - 300)
-            # 섹션 텍스트 길이의 3배 또는 최소 3000자 확보
-            sec_len = len(req.text)
-            end = min(len(raw_text), pos + max(sec_len * 3, 3000))
-            raw_window = raw_text[start:end]
+        sm_result = get_source_map(doc_id)
+    except HTTPException:
+        raise
+    source_map = sm_result.get("source_map", {})
+    raw_window = source_map.get(req.section_name, "")
 
     if not raw_window:
-        # 폴백: raw_text 앞부분 (전체 문서 보내면 느려지므로 제한)
-        raw_window = raw_text[:15000]
+        # source-map에서도 못 찾은 경우: raw_text 폴백
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
+        doc = cursor.fetchone()
+        conn.close()
+        if not doc or not doc["raw_text"]:
+            raise HTTPException(status_code=400, detail="원본 텍스트가 없습니다.")
+        raw_window = doc["raw_text"][:15000]
 
     # preview 모드: LLM 호출 없이 보낼 내용만 반환
     if req.preview:
         return {
             "success": True, "preview": True,
             "section_name": req.section_name,
-            "anchor": anchor,
-            "anchor_found": bool(anchor and len(anchor) >= 10 and raw_text.find(anchor) != -1),
             "raw_window": raw_window,
             "raw_window_len": len(raw_window),
         }
@@ -2522,7 +2503,7 @@ def manualize_section(doc_id: str, req: ManualizeSectionRequest):
         else:
             prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_window)
 
-        print(f"[MANUALIZE-SECTION] '{req.section_name}' anchor='{anchor[:30]}...' window={len(raw_window)} chars")
+        print(f"[MANUALIZE-SECTION] '{req.section_name}' window={len(raw_window)} chars (source-map)")
         content = call_llm(prompt, temperature=0.3)
         if not content:
             raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")
