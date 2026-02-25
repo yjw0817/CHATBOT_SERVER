@@ -2587,6 +2587,42 @@ class RefineRequest(BaseModel):
     allow_qa: Optional[str] = None  # "true" or "false" (for fill task)
 
 
+def _fix_unescaped_quotes(raw: str) -> str:
+    """Fix unescaped double quotes inside JSON string values.
+    Walks char-by-char: when inside a string, any " that isn't followed by
+    a JSON structural char (,:]}]) is treated as a literal and escaped."""
+    result = []
+    i = 0
+    in_string = False
+    while i < len(raw):
+        c = raw[i]
+        if not in_string:
+            result.append(c)
+            if c == '"':
+                in_string = True
+        else:
+            if c == '\\':
+                # escaped char — copy both
+                result.append(c)
+                if i + 1 < len(raw):
+                    i += 1
+                    result.append(raw[i])
+            elif c == '"':
+                # Is this the closing quote? Look ahead for JSON structural chars
+                rest = raw[i + 1:].lstrip()
+                if rest and rest[0] in ':,}]':
+                    # closing quote
+                    result.append(c)
+                    in_string = False
+                else:
+                    # unescaped quote inside value — escape it
+                    result.append('\\"')
+            else:
+                result.append(c)
+        i += 1
+    return ''.join(result)
+
+
 def _clean_llm_json(raw: str):
     """Clean and parse JSON from LLM response. Handles common issues.
     Returns dict or list depending on input."""
@@ -2604,15 +2640,11 @@ def _clean_llm_json(raw: str):
     except json.JSONDecodeError:
         pass
     # Attempt 3: fix unescaped quotes inside string values
-    # e.g. "message": "문제는 "이것" 입니다" → "message": "문제는 \"이것\" 입니다"
+    # e.g. "상단에"저장"버튼" → "상단에\"저장\"버튼"
     try:
-        fixed = re.sub(
-            r'(?<=: )"((?:[^"\\]|\\.)*?)"(?=\s*[,}\]])',
-            lambda m: '"' + m.group(1) + '"',
-            raw
-        )
+        fixed = _fix_unescaped_quotes(raw)
         return json.loads(fixed)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, Exception):
         pass
     # Attempt 4: try closing at each } or ] from the end (handles trailing garbage)
     close_positions = [i for i, c in enumerate(raw) if c in ('}', ']')]
