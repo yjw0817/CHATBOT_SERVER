@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section style="max-width:900px;margin:0 auto;padding:1rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h2 style="margin:0;">LLM 프롬프트 설정</h2>
+        <a href="/ui/upload" style="font-size:13px;color:#6b7280;text-decoration:none;">&larr; Upload 페이지로 돌아가기</a>
+    </div>
+
+    <!-- Step Tabs -->
+    <div id="prompt-tabs" style="display:flex;gap:2px;margin-bottom:1.2rem;border-bottom:2px solid #e5e7eb;padding-bottom:0;">
+        <button class="prompt-tab active" data-step="manualize" onclick="switchTab('manualize')">Manualize</button>
+        <button class="prompt-tab" data-step="fill" onclick="switchTab('fill')">맥락보강</button>
+        <button class="prompt-tab" data-step="refine" onclick="switchTab('refine')">RAG최적화</button>
+        <button class="prompt-tab" data-step="gate" onclick="switchTab('gate')">Gate</button>
+    </div>
+
+    <!-- Controls row -->
+    <div style="display:flex;gap:1rem;align-items:flex-end;margin-bottom:1rem;flex-wrap:wrap;">
+        <!-- Model selector -->
+        <div style="flex:1;min-width:200px;">
+            <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">모델</label>
+            <select id="sel-model" onchange="onModelChange()" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid #d1d5db;font-size:13px;color:#374151;"></select>
+        </div>
+        <!-- Version selector -->
+        <div style="flex:1;min-width:200px;">
+            <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">프롬프트 버전</label>
+            <select id="sel-version" onchange="onVersionChange()" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid #d1d5db;font-size:13px;color:#374151;"></select>
+        </div>
+        <!-- Use button -->
+        <div>
+            <button onclick="doAssign()" style="padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;border:none;background:#16a34a;color:#fff;cursor:pointer;white-space:nowrap;">사용</button>
+        </div>
+    </div>
+
+    <!-- Status -->
+    <div id="status-bar" style="font-size:12px;color:#6b7280;margin-bottom:0.6rem;"></div>
+
+    <!-- Placeholder hint -->
+    <div id="placeholder-hint" style="font-size:11px;color:#9ca3af;margin-bottom:4px;"></div>
+
+    <!-- Single editor -->
+    <textarea id="editor" rows="20" style="width:100%;border:1px solid #d1d5db;border-radius:8px;padding:12px;font-size:13px;font-family:monospace;resize:vertical;box-sizing:border-box;color:#374151;" placeholder="프롬프트 내용..."></textarea>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:0.5rem;margin-top:0.8rem;flex-wrap:wrap;">
+        <button onclick="doSaveExisting()" id="btn-save" style="display:none;padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;border:1px solid #93c5fd;background:#dbeafe;color:#1d4ed8;cursor:pointer;">저장 (덮어쓰기)</button>
+        <button onclick="doSaveNew()" style="padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;border:1px solid #93c5fd;background:#dbeafe;color:#1d4ed8;cursor:pointer;">새 버전으로 저장</button>
+        <button onclick="doDelete()" id="btn-delete" style="display:none;padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;border:1px solid #fecaca;background:#fef2f2;color:#dc2626;cursor:pointer;">버전 삭제</button>
+    </div>
+
+    <!-- Test section -->
+    <hr style="margin:1.5rem 0;border:none;border-top:1px solid #e5e7eb;">
+    <h3 style="margin:0 0 0.5rem;font-size:15px;color:#374151;">프롬프트 테스트</h3>
+    <textarea id="test-input" rows="6" style="width:100%;border:1px solid #d1d5db;border-radius:8px;padding:12px;font-size:13px;font-family:monospace;resize:vertical;box-sizing:border-box;color:#374151;" placeholder="원본 텍스트를 입력하세요..."></textarea>
+    <div style="margin-top:0.5rem;">
+        <button onclick="doTest()" id="btn-test" style="padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;border:1px solid #fbbf24;background:#fef3c7;color:#92400e;cursor:pointer;">테스트</button>
+        <span id="test-status" style="font-size:12px;color:#6b7280;margin-left:8px;"></span>
+    </div>
+    <pre id="test-result" style="display:none;margin-top:0.8rem;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;font-size:12px;font-family:monospace;white-space:pre-wrap;word-break:break-word;max-height:500px;overflow-y:auto;color:#374151;"></pre>
+</section>
+
+<script>
+    let _versions = {};       // { step: { name: content } }
+    let _assignments = {};    // { model: { step: name|null } }
+    let _defaults = {};       // { step: { text, placeholders } }
+    let _models = [];         // [{ name, size_gb }]
+    let _currentModel = '';   // server's active model
+    let _step = 'manualize';
+    let _loadedVersion = null; // currently loaded version name (null = default)
+
+    const STEPS = ['manualize', 'fill', 'refine', 'gate'];
+
+    // ---- Init ----
+    (async function() {
+        try {
+            const [pRes, dRes, mRes] = await Promise.all([
+                fetch('/api/llm/prompts'),
+                fetch('/api/llm/prompts/defaults'),
+                fetch('/api/llm/models')
+            ]);
+            const p = await pRes.json();
+            _defaults = await dRes.json();
+            const m = await mRes.json();
+            _versions = p.versions || {};
+            _assignments = p.assignments || {};
+            _currentModel = p.current_model || '';
+            _models = m.models || [];
+
+            buildModelSelect();
+            refresh();
+        } catch (e) {
+            alert('로드 오류: ' + e.message);
+        }
+    })();
+
+    // ---- Model select ----
+    function buildModelSelect() {
+        const sel = document.getElementById('sel-model');
+        sel.innerHTML = '';
+        const added = new Set();
+        // Current model first
+        if (_currentModel) {
+            sel.innerHTML += `<option value="${_esc(_currentModel)}">${_esc(_currentModel)} (현재)</option>`;
+            added.add(_currentModel);
+        }
+        // Models already in assignments
+        for (const m of Object.keys(_assignments)) {
+            if (!added.has(m)) {
+                sel.innerHTML += `<option value="${_esc(m)}">${_esc(m)}</option>`;
+                added.add(m);
+            }
+        }
+        // Available models from server
+        for (const m of _models) {
+            if (!added.has(m.name)) {
+                sel.innerHTML += `<option value="${_esc(m.name)}">${_esc(m.name)}${m.size_gb ? ' (' + m.size_gb + 'GB)' : ''}</option>`;
+                added.add(m.name);
+            }
+        }
+    }
+
+    function getSelectedModel() {
+        return document.getElementById('sel-model').value;
+    }
+
+    function onModelChange() { refresh(); }
+
+    // ---- Version select ----
+    function buildVersionSelect() {
+        const sel = document.getElementById('sel-version');
+        const stepVersions = _versions[_step] || {};
+        const model = getSelectedModel();
+        const assigned = (_assignments[model] || {})[_step] || null;
+
+        const inUse = !assigned ? '' : assigned;
+        sel.innerHTML = `<option value="">${!inUse ? '기본 프롬프트 ✔' : '기본 프롬프트'}</option>`;
+        for (const name of Object.keys(stepVersions)) {
+            const mark = (name === inUse) ? ' ✔' : '';
+            sel.innerHTML += `<option value="${_esc(name)}">${_esc(name)}${mark}</option>`;
+        }
+        // Select the assigned version
+        sel.value = assigned || '';
+    }
+
+    function onVersionChange() {
+        loadVersion(document.getElementById('sel-version').value || null);
+    }
+
+    // ---- Load version into editor ----
+    function loadVersion(versionName) {
+        _loadedVersion = versionName;
+        const info = _defaults[_step] || {};
+        const editor = document.getElementById('editor');
+
+        if (versionName && (_versions[_step] || {})[versionName]) {
+            editor.value = _versions[_step][versionName];
+            editor.readOnly = false;
+            editor.style.background = '#fff';
+        } else {
+            editor.value = info.text || '';
+            editor.readOnly = true;
+            editor.style.background = '#f7fef9';
+            _loadedVersion = null;
+        }
+
+        // Placeholder hint
+        document.getElementById('placeholder-hint').textContent =
+            '플레이스홀더: ' + (info.placeholders || []).join(', ');
+
+        // Show/hide buttons
+        document.getElementById('btn-save').style.display = _loadedVersion ? '' : 'none';
+        document.getElementById('btn-delete').style.display = _loadedVersion ? '' : 'none';
+
+        updateStatus();
+    }
+
+    // ---- Status bar ----
+    function updateStatus() {
+        const model = getSelectedModel();
+        const assigned = (_assignments[model] || {})[_step] || null;
+        const bar = document.getElementById('status-bar');
+        const label = assigned
+            ? `<b>${_esc(model)}</b> → 버전 <b style="color:#1d4ed8;">${_esc(assigned)}</b> 사용 중`
+            : `<b>${_esc(model || '(모델 없음)')}</b> → <span style="color:#16a34a;font-weight:600;">기본 프롬프트</span> 사용 중`;
+        bar.innerHTML = label;
+    }
+
+    // ---- Refresh all ----
+    function refresh() {
+        buildVersionSelect();
+        const model = getSelectedModel();
+        const assigned = (_assignments[model] || {})[_step] || null;
+        loadVersion(assigned);
+    }
+
+    // ---- Tab switch ----
+    function switchTab(step) {
+        _step = step;
+        document.querySelectorAll('.prompt-tab').forEach(t => t.classList.toggle('active', t.dataset.step === step));
+        refresh();
+    }
+
+    // ---- Actions ----
+    async function doAssign() {
+        const model = getSelectedModel();
+        const version = document.getElementById('sel-version').value || null;
+        if (!model) { alert('모델을 선택하세요.'); return; }
+        try {
+            const body = new URLSearchParams();
+            body.append('model', model);
+            body.append('step', _step);
+            if (version) body.append('version', version);
+            await fetch('/api/llm/prompts/assign', { method: 'POST', body });
+            if (!_assignments[model]) {
+                _assignments[model] = {};
+                for (const s of STEPS) _assignments[model][s] = null;
+            }
+            _assignments[model][_step] = version;
+            updateStatus();
+            alert(version ? `"${version}" 버전을 ${model}에 적용했습니다.` : `${model}을 기본 프롬프트로 전환했습니다.`);
+        } catch (e) {
+            alert('적용 오류: ' + e.message);
+        }
+    }
+
+    async function doSaveExisting() {
+        if (!_loadedVersion) return;
+        const content = document.getElementById('editor').value;
+        try {
+            const body = new URLSearchParams();
+            body.append('step', _step);
+            body.append('name', _loadedVersion);
+            body.append('content', content);
+            await fetch('/api/llm/prompts/version', { method: 'POST', body });
+            if (!_versions[_step]) _versions[_step] = {};
+            _versions[_step][_loadedVersion] = content;
+            alert(`"${_loadedVersion}" 저장 완료.`);
+        } catch (e) {
+            alert('저장 오류: ' + e.message);
+        }
+    }
+
+    async function doSaveNew() {
+        const name = prompt('새 버전 이름을 입력하세요:');
+        if (!name || !name.trim()) return;
+        const content = document.getElementById('editor').value;
+        try {
+            const body = new URLSearchParams();
+            body.append('step', _step);
+            body.append('name', name.trim());
+            body.append('content', content);
+            await fetch('/api/llm/prompts/version', { method: 'POST', body });
+            if (!_versions[_step]) _versions[_step] = {};
+            _versions[_step][name.trim()] = content;
+            buildVersionSelect();
+            document.getElementById('sel-version').value = name.trim();
+            loadVersion(name.trim());
+            alert(`"${name.trim()}" 버전 생성 완료.`);
+        } catch (e) {
+            alert('저장 오류: ' + e.message);
+        }
+    }
+
+    async function doDelete() {
+        if (!_loadedVersion) return;
+        if (!confirm(`"${_loadedVersion}" 버전을 삭제하시겠습니까?`)) return;
+        try {
+            const body = new URLSearchParams();
+            body.append('step', _step);
+            body.append('name', _loadedVersion);
+            await fetch('/api/llm/prompts/version', { method: 'DELETE', body });
+            delete (_versions[_step] || {})[_loadedVersion];
+            // Clear assignments referencing this version
+            for (const m of Object.keys(_assignments)) {
+                if ((_assignments[m] || {})[_step] === _loadedVersion) {
+                    _assignments[m][_step] = null;
+                }
+            }
+            refresh();
+            alert('삭제 완료.');
+        } catch (e) {
+            alert('삭제 오류: ' + e.message);
+        }
+    }
+
+    // ---- Test ----
+    async function doTest() {
+        const rawText = document.getElementById('test-input').value.trim();
+        if (!rawText) { alert('원본 텍스트를 입력하세요.'); return; }
+        const promptText = document.getElementById('editor').value;
+        if (!promptText.trim()) { alert('프롬프트가 비어있습니다.'); return; }
+
+        const btn = document.getElementById('btn-test');
+        const status = document.getElementById('test-status');
+        const resultEl = document.getElementById('test-result');
+        btn.disabled = true;
+        btn.textContent = '처리 중...';
+        status.textContent = 'LLM 응답 대기 중...';
+        resultEl.style.display = 'none';
+
+        try {
+            const body = new URLSearchParams();
+            body.append('step', _step);
+            body.append('prompt_text', promptText);
+            body.append('raw_text', rawText);
+            const resp = await fetch('/api/llm/prompts/test', { method: 'POST', body });
+            const data = await resp.json();
+            if (!resp.ok) {
+                status.textContent = '오류: ' + (data.detail || resp.statusText);
+                return;
+            }
+            resultEl.textContent = data.result;
+            resultEl.style.display = 'block';
+            status.textContent = `완료 (${data.result.length.toLocaleString()}자)`;
+        } catch (e) {
+            status.textContent = '요청 실패: ' + e.message;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '테스트';
+        }
+    }
+
+    // ---- Helpers ----
+    function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+
+<style>
+    .prompt-tab {
+        padding: 8px 20px;
+        border: 1px solid #d1d5db;
+        border-bottom: none;
+        border-radius: 8px 8px 0 0;
+        background: #f9fafb;
+        cursor: pointer;
+        font-size: 13px;
+        color: #6b7280;
+    }
+    .prompt-tab.active {
+        background: #fff;
+        color: #111827;
+        font-weight: 600;
+        border-bottom: 2px solid #fff;
+        margin-bottom: -2px;
+        position: relative;
+        z-index: 1;
+    }
+</style>
+{% endblock %}

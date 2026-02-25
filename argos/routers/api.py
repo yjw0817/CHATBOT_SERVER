@@ -187,6 +187,21 @@ def assign_prompt_version(model: str = Form(...), step: str = Form(...), version
     return {"success": True}
 
 
+@router.post("/llm/prompts/test")
+def test_prompt(step: str = Form(...), prompt_text: str = Form(...), raw_text: str = Form(...)):
+    """Test a prompt with raw_text input. Returns raw LLM response."""
+    if not is_llm_available():
+        raise HTTPException(status_code=503, detail="LLM이 비활성 상태입니다.")
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="원본 텍스트를 입력하세요.")
+
+    formatted = _safe_format(prompt_text, raw_text=raw_text, section_text=raw_text, sections_text=raw_text)
+    content = call_llm(formatted, temperature=0.3)
+    if not content:
+        raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")
+    return {"result": content}
+
+
 @router.get("/llm/mode")
 def get_mode():
     """Get current LLM mode (local/remote)."""
