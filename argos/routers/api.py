@@ -2461,32 +2461,56 @@ class ManualizeSectionRequest(BaseModel):
 
 @router.post("/doc/{doc_id}/manualize-section")
 def manualize_section(doc_id: str, req: ManualizeSectionRequest):
-    """Re-manualize a single section. refine-text와 동일한 패턴:
-    섹션 텍스트 + raw_text 컨텍스트를 LLM에 전달."""
+    """Re-manualize a single section.
+    source_anchor 기반으로 원본 raw_text 영역을 찾아 LLM에 전달."""
     if not is_llm_available():
         raise HTTPException(status_code=503, detail="LLM 사용 불가")
 
-    # 1) raw_text 조회 후 즉시 닫기
+    # 1) raw_text + source_anchor 조회 후 즉시 닫기
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
     doc = cursor.fetchone()
-    conn.close()
-
     if not doc or not doc["raw_text"]:
+        conn.close()
         raise HTTPException(status_code=400, detail="원본 텍스트가 없습니다.")
 
-    raw_text = doc["raw_text"][:30000]
+    try:
+        cursor.execute(
+            "SELECT source_anchor FROM manual_sections WHERE doc_id = %s AND section_name = %s",
+            (doc_id, req.section_name))
+        sec_row = cursor.fetchone()
+    except Exception:
+        sec_row = None
+    conn.close()
 
-    # 2) LLM 호출 — 기존 manualize 프롬프트에 섹션 텍스트를 raw_text로 전달
+    raw_text = doc["raw_text"]
+    anchor = (sec_row["source_anchor"] or "") if sec_row else ""
+
+    # 2) source_anchor로 원본 영역 추출 (원본 비교와 동일한 로직)
+    raw_window = ""
+    if anchor and len(anchor) >= 10:
+        pos = raw_text.find(anchor)
+        if pos != -1:
+            start = max(0, pos - 300)
+            # 섹션 텍스트 길이의 3배 또는 최소 3000자 확보
+            sec_len = len(req.text)
+            end = min(len(raw_text), pos + max(sec_len * 3, 3000))
+            raw_window = raw_text[start:end]
+
+    if not raw_window:
+        # 폴백: raw_text 앞부분 (전체 문서 보내면 느려지므로 제한)
+        raw_window = raw_text[:15000]
+
+    # 3) LLM 호출 — 원본 raw_text 영역을 manualize 프롬프트에 전달
     try:
         override = _get_effective_prompt("manualize")
         if override:
-            prompt = _safe_format(override, raw_text=req.text)
+            prompt = _safe_format(override, raw_text=raw_window)
         else:
-            prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=req.text)
+            prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_window)
 
-        print(f"[MANUALIZE-SECTION] '{req.section_name}' ({len(req.text)} chars)")
+        print(f"[MANUALIZE-SECTION] '{req.section_name}' anchor='{anchor[:30]}...' window={len(raw_window)} chars")
         content = call_llm(prompt, temperature=0.3)
         if not content:
             raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")
