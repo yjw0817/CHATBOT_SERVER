@@ -366,8 +366,23 @@
             }
             lines.push('');
         }
+        // structured → condition/procedure만 표시
+        if (node.structured) {
+            const s = node.structured;
+            if (s.condition) lines.push(`  [조건] ${s.condition}`);
+            if (s.procedure && s.procedure.length) {
+                for (let i = 0; i < s.procedure.length; i++)
+                    lines.push(`  ${i + 1}. ${s.procedure[i]}`);
+            }
+            if (s.exceptions && s.exceptions.length) {
+                for (const ex of s.exceptions) lines.push(`  ⚠ ${ex}`);
+            }
+            lines.push('');
+        }
         const skip = new Set(['doc_title','name','title','summary','text','bullets',
-                              'source_anchor','section_id','rule_id','doc_type','tags']);
+                              'source_anchor','section_id','rule_id','doc_type','tags',
+                              'structured','source_quotes','issues',
+                              'clarification_questions','pii_handling','change_summary']);
         for (const [k, v] of Object.entries(node)) {
             if (skip.has(k)) continue;
             if (Array.isArray(v) || (v && typeof v === 'object')) _walkNode(v, lines, depth + 1);
