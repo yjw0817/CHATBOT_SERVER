@@ -317,8 +317,7 @@
                 status.textContent = `오류 (${elapsed}초): ` + (data.detail || resp.statusText);
                 return;
             }
-            let display = _formatLLMResult(data.result);
-            resultEl.textContent = display;
+            resultEl.textContent = data.formatted || data.result;
             resultEl.style.display = 'block';
             status.textContent = `완료 — ${elapsed}초, ${data.result.length.toLocaleString()}자`;
         } catch (e) {
@@ -328,64 +327,6 @@
             btn.disabled = false;
             btn.classList.remove('test-running');
             btn.textContent = '테스트';
-        }
-    }
-
-    // ---- Format LLM result ----
-    function _formatLLMResult(raw) {
-        try {
-            const jsonMatch = raw.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) return raw;
-            const obj = JSON.parse(jsonMatch[0]);
-            const lines = [];
-            _walkNode(obj, lines, 0);
-            const result = lines.join('\n').trim();
-            return result || raw;
-        } catch(_) { return raw; }
-    }
-
-    function _walkNode(node, lines, depth) {
-        if (typeof node === 'string') { lines.push(node); return; }
-        if (Array.isArray(node)) {
-            for (const item of node) _walkNode(item, lines, depth);
-            return;
-        }
-        if (!node || typeof node !== 'object') return;
-
-        const heading = node.doc_title || node.name || node.title || '';
-        if (heading) {
-            const mark = depth === 0 ? '━━━' : depth === 1 ? '───' : '•';
-            lines.push(`${mark} ${heading} ${depth <= 1 ? mark : ''}`);
-        }
-        if (node.summary) lines.push(node.summary + '\n');
-        if (node.text) lines.push(node.text);
-        if (node.bullets) {
-            for (const b of node.bullets) {
-                if (typeof b === 'string') lines.push(`  • ${b}`);
-                else _walkNode(b, lines, depth + 1);
-            }
-            lines.push('');
-        }
-        // structured → condition/procedure만 표시
-        if (node.structured) {
-            const s = node.structured;
-            if (s.condition) lines.push(`  [조건] ${s.condition}`);
-            if (s.procedure && s.procedure.length) {
-                for (let i = 0; i < s.procedure.length; i++)
-                    lines.push(`  ${i + 1}. ${s.procedure[i]}`);
-            }
-            if (s.exceptions && s.exceptions.length) {
-                for (const ex of s.exceptions) lines.push(`  ⚠ ${ex}`);
-            }
-            lines.push('');
-        }
-        const skip = new Set(['doc_title','name','title','summary','text','bullets',
-                              'source_anchor','section_id','rule_id','doc_type','tags',
-                              'structured','source_quotes','issues',
-                              'clarification_questions','pii_handling','change_summary']);
-        for (const [k, v] of Object.entries(node)) {
-            if (skip.has(k)) continue;
-            if (Array.isArray(v) || (v && typeof v === 'object')) _walkNode(v, lines, depth + 1);
         }
     }
 

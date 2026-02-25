@@ -189,7 +189,7 @@ def assign_prompt_version(model: str = Form(...), step: str = Form(...), version
 
 @router.post("/llm/prompts/test")
 def test_prompt(step: str = Form(...), prompt_text: str = Form(...), raw_text: str = Form(...)):
-    """Test a prompt with raw_text input. Returns raw LLM response."""
+    """Test a prompt with raw_text input. Returns raw + formatted LLM response."""
     if not is_llm_available():
         raise HTTPException(status_code=503, detail="LLM이 비활성 상태입니다.")
     if not raw_text.strip():
@@ -207,7 +207,73 @@ def test_prompt(step: str = Form(...), prompt_text: str = Form(...), raw_text: s
     log_file.write_text(content, encoding="utf-8")
     print(f"[PROMPT_TEST] 응답 저장: {log_file} ({len(content)}자)")
 
-    return {"result": content}
+    # JSON 파싱 + 읽기 좋은 형태로 변환
+    display = content
+    try:
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            parsed = _clean_llm_json(json_match.group())
+            lines = []
+            _format_test_node(parsed, lines, 0)
+            result = "\n".join(lines).strip()
+            if result:
+                display = result
+    except Exception as e:
+        print(f"[PROMPT_TEST] 포맷 변환 실패: {e}")
+
+    return {"result": content, "formatted": display}
+
+
+def _format_test_node(node, lines: list, depth: int):
+    """재귀적으로 LLM JSON 응답을 읽기 좋은 텍스트로 변환."""
+    if isinstance(node, str):
+        lines.append(node)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _format_test_node(item, lines, depth)
+        return
+    if not isinstance(node, dict):
+        return
+
+    heading = node.get("doc_title") or node.get("name") or node.get("title") or ""
+    if heading:
+        mark = "━━━" if depth == 0 else "───" if depth == 1 else "•"
+        end_mark = f" {mark}" if depth <= 1 else ""
+        lines.append(f"{mark} {heading}{end_mark}")
+    if node.get("summary"):
+        lines.append(node["summary"] + "\n")
+    if node.get("text"):
+        lines.append(node["text"])
+    if node.get("bullets"):
+        for b in node["bullets"]:
+            if isinstance(b, str):
+                lines.append(f"  • {b}")
+            else:
+                _format_test_node(b, lines, depth + 1)
+        lines.append("")
+    # structured → condition/procedure만 표시
+    if node.get("structured"):
+        s = node["structured"]
+        if s.get("condition"):
+            lines.append(f"  [조건] {s['condition']}")
+        if s.get("procedure"):
+            for i, p in enumerate(s["procedure"], 1):
+                lines.append(f"  {i}. {p}")
+        if s.get("exceptions"):
+            for ex in s["exceptions"]:
+                lines.append(f"  ⚠ {ex}")
+        lines.append("")
+
+    skip = {"doc_title", "name", "title", "summary", "text", "bullets",
+            "source_anchor", "section_id", "rule_id", "doc_type", "tags",
+            "structured", "source_quotes", "issues",
+            "clarification_questions", "pii_handling", "change_summary"}
+    for k, v in node.items():
+        if k in skip:
+            continue
+        if isinstance(v, (list, dict)):
+            _format_test_node(v, lines, depth + 1)
 
 
 @router.get("/llm/mode")
