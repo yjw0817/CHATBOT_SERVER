@@ -43,6 +43,7 @@ def init_db():
             source_type VARCHAR(20),
             content_hash VARCHAR(64),
             raw_text LONGTEXT,
+            file_size INT DEFAULT NULL,
             manualize_json LONGTEXT DEFAULT NULL,
             raw_text_hash VARCHAR(64) DEFAULT NULL,
             completed_phases VARCHAR(200) DEFAULT NULL,
@@ -113,10 +114,13 @@ def init_db():
         ("manual_sections", ("ai_text", "LONGTEXT DEFAULT NULL")),
         ("manual_sections", ("sort_order", "INT DEFAULT 0")),
         ("manual_sections", ("source_anchor", "VARCHAR(500) DEFAULT NULL")),
+        ("manual_sections", ("source_start", "INT DEFAULT NULL")),
+        ("manual_sections", ("source_end", "INT DEFAULT NULL")),
         # chunks migrations
         ("chunks", ("page_start", "INT DEFAULT NULL")),
         ("chunks", ("page_end", "INT DEFAULT NULL")),
         # documents migrations
+        ("documents", ("file_size", "INT DEFAULT NULL")),
         ("documents", ("manualize_json", "LONGTEXT DEFAULT NULL")),
         ("documents", ("raw_text_hash", "VARCHAR(64) DEFAULT NULL")),
         ("documents", ("completed_phases", "VARCHAR(200) DEFAULT NULL")),

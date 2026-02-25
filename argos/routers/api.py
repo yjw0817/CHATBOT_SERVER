@@ -1142,15 +1142,21 @@ def manualize(doc_id: str, force: bool = False):
         else:
             text_val = section_data if section_data else "정보 없음"
             anchor_val = ""
+        if isinstance(section_data, dict):
+            src_start = section_data.get("source_start")
+            src_end = section_data.get("source_end")
+        else:
+            src_start = None
+            src_end = None
         section_details[section_name] = text_val
         cursor.execute(
             """INSERT INTO manual_sections
                (section_id, doc_id, section_name, section_text, ai_text,
-                source_anchor,
+                source_anchor, source_start, source_end,
                 gate_status, gate_score, gate_reasons_json, gate_stale, sort_order)
-               VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, NULL, 0, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, 0, %s)""",
             (section_id, doc_id, section_name, text_val, text_val,
-             anchor_val, sec_counter)
+             anchor_val, src_start, src_end, sec_counter)
         )
 
     cursor.execute("UPDATE documents SET updated_at = %s WHERE doc_id = %s",
@@ -1174,7 +1180,7 @@ def manualize(doc_id: str, force: bool = False):
 
 
 def _manualize_single(raw_text: str, doc_id: str) -> dict:
-    """Single LLM call with full raw_text. Returns {section_name: {"text": ..., "source_anchor": ...}}."""
+    """Single LLM call with full raw_text. Returns {section_name: {"text": ..., "source_anchor": ..., "source_start": 0, "source_end": N}}."""
     override = _get_effective_prompt("manualize")
     if override:
         prompt = _safe_format(override, raw_text=raw_text)
@@ -1189,7 +1195,13 @@ def _manualize_single(raw_text: str, doc_id: str) -> dict:
         raise Exception("LLM 응답에서 JSON을 찾을 수 없습니다.")
 
     parsed = _clean_llm_json(json_match.group())
-    return _flatten_manualize_json(parsed)
+    result = _flatten_manualize_json(parsed)
+    # Single call covers full raw_text range
+    for sec_data in result.values():
+        if isinstance(sec_data, dict):
+            sec_data["source_start"] = 0
+            sec_data["source_end"] = len(raw_text)
+    return result
 
 
 def _split_by_headings(raw_text: str) -> list:
@@ -1230,33 +1242,41 @@ def _split_by_headings(raw_text: str) -> list:
 
 def _group_sections_into_windows(sections: list, window_size: int) -> list:
     """Group heading-based sections into windows that fit within window_size.
-    Each window is a string. If a single section exceeds window_size, it is sent alone."""
+    Returns list of (text, start_pos, end_pos) tuples."""
     windows = []
     current_window = ""
+    current_start = 0
+    current_end = 0
 
-    for _pos, section_text in sections:
-        # If adding this section would exceed limit
+    for pos, section_text in sections:
         if current_window and len(current_window) + len(section_text) > window_size:
-            windows.append(current_window)
+            windows.append((current_window, current_start, current_end))
             current_window = section_text
+            current_start = pos
+            current_end = pos + len(section_text)
         else:
+            if not current_window:
+                current_start = pos
             current_window += section_text
+            current_end = pos + len(section_text)
 
     if current_window:
-        windows.append(current_window)
+        windows.append((current_window, current_start, current_end))
 
     return windows
 
 
-def _process_one_window(window_text: str, idx: int, total: int) -> dict:
-    """Process a single window. Returns {section_name: {"text": ..., "source_anchor": ...}}.
+def _process_one_window(window_text: str, idx: int, total: int,
+                        start_pos: int = 0, end_pos: int = 0) -> dict:
+    """Process a single window. Returns {section_name: {"text": ..., "source_anchor": ..., "source_start": N, "source_end": M}}.
     LLM 실패 시에도 원문을 보존하여 데이터 로스 방지."""
     print(f"[MANUALIZE] Processing window {idx + 1}/{total} ({len(window_text)} chars)...")
 
     # 원문에서 폴백 섹션명 추출 (첫 줄 사용)
     first_line = window_text.strip().split('\n')[0][:60].strip()
     fallback_name = first_line if first_line else f"섹션 (윈도우 {idx + 1})"
-    fallback = {fallback_name: {"text": window_text, "source_anchor": ""}}
+    fallback = {fallback_name: {"text": window_text, "source_anchor": "",
+                                "source_start": start_pos, "source_end": end_pos}}
 
     try:
         override = _get_effective_prompt("manualize")
@@ -1277,6 +1297,11 @@ def _process_one_window(window_text: str, idx: int, total: int) -> dict:
         if not result:
             print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → 원문 보존")
             return fallback
+        # Inject position into all sections from this window
+        for sec_data in result.values():
+            if isinstance(sec_data, dict):
+                sec_data["source_start"] = start_pos
+                sec_data["source_end"] = end_pos
         return result
     except Exception as e:
         print(f"[MANUALIZE] Window {idx + 1} failed: {e} → 원문 보존")
@@ -1285,7 +1310,7 @@ def _process_one_window(window_text: str, idx: int, total: int) -> dict:
 
 def _merge_sections(all_sections: dict, new_sections: dict, idx: int) -> None:
     """Merge new_sections into all_sections. Dedup by exact match, index on conflict.
-    Values are {"text": ..., "source_anchor": ...} dicts."""
+    Values are {"text": ..., "source_anchor": ..., "source_start": N, "source_end": M} dicts."""
     for name, section_data in new_sections.items():
         text = section_data["text"] if isinstance(section_data, dict) else section_data
         if name in all_sections:
@@ -1311,7 +1336,7 @@ def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
         print(f"[MANUALIZE] Remote sequential: {total} sections for {doc_id}")
         _manualize_progress[doc_id] = {"done": 0, "total": total, "sections": {}}
         all_sections = {}
-        for i, (_pos, section_text) in enumerate(sections):
+        for i, (sec_pos, section_text) in enumerate(sections):
             # Check cancellation before each section
             if _manualize_progress.get(doc_id, {}).get("cancelled"):
                 print(f"[MANUALIZE] Cancelled at section {i}/{total} for {doc_id}")
@@ -1319,7 +1344,9 @@ def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
             if not section_text.strip():
                 _manualize_progress[doc_id]["done"] = i + 1
                 continue
-            result = _process_one_window(section_text, i, total)
+            sec_end = sec_pos + len(section_text)
+            result = _process_one_window(section_text, i, total,
+                                         start_pos=sec_pos, end_pos=sec_end)
             _merge_sections(all_sections, result, i)
             _manualize_progress[doc_id]["done"] = i + 1
             _manualize_progress[doc_id]["sections"] = dict(all_sections)
@@ -1349,15 +1376,18 @@ def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
 
         all_sections = {}
         if total_windows == 1:
-            result = _process_one_window(windows[0], 0, 1)
+            w_text, w_start, w_end = windows[0]
+            result = _process_one_window(w_text, 0, 1,
+                                         start_pos=w_start, end_pos=w_end)
             _merge_sections(all_sections, result, 0)
             _manualize_progress[doc_id]["done"] = total_sections
             _manualize_progress[doc_id]["sections"] = dict(all_sections)
         else:
             with ThreadPoolExecutor(max_workers=total_windows) as executor:
                 futures = {
-                    executor.submit(_process_one_window, w, i, total_windows): i
-                    for i, w in enumerate(windows)
+                    executor.submit(_process_one_window, w_text, i, total_windows,
+                                    start_pos=w_start, end_pos=w_end): i
+                    for i, (w_text, w_start, w_end) in enumerate(windows)
                 }
                 for future in as_completed(futures):
                     i = futures[future]
@@ -1466,7 +1496,7 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT chunk_id, chunk_index, raw_chunk, notes FROM doc_chunks WHERE chunk_id = %s AND doc_id = %s", (chunk_id, doc_id))
+    cursor.execute("SELECT chunk_id, chunk_index, raw_chunk, notes, char_start, char_end FROM doc_chunks WHERE chunk_id = %s AND doc_id = %s", (chunk_id, doc_id))
     chunk_row = cursor.fetchone()
     if not chunk_row:
         conn.close()
@@ -1482,6 +1512,8 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
         "raw_chunk": chunk_row["raw_chunk"] or "",
         "notes": chunk_row["notes"] or "",
     }
+    chunk_char_start = chunk_row.get("char_start")
+    chunk_char_end = chunk_row.get("char_end")
 
     result = _manualize_chunk(chunk, doc_id)
 
@@ -1498,8 +1530,10 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
     if existing:
         cursor.execute(
             """UPDATE manual_sections SET section_name = %s, section_text = %s,
-               source_anchor = %s, evidence_json = %s, updated_at = %s WHERE section_id = %s""",
+               source_anchor = %s, source_start = %s, source_end = %s,
+               evidence_json = %s, updated_at = %s WHERE section_id = %s""",
             (section_name, section_text, source_anchor,
+             chunk_char_start, chunk_char_end,
              json.dumps(evidence, ensure_ascii=False),
              datetime.now().isoformat(), existing["section_id"])
         )
@@ -1509,10 +1543,12 @@ def manualize_single_chunk(doc_id: str, chunk_id: str):
         cursor.execute(
             """INSERT INTO manual_sections
                (section_id, doc_id, section_name, section_text,
-                source_chunk_id, source_anchor, evidence_json, merge_status, sort_order)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, 'BODY', %s)""",
+                source_chunk_id, source_anchor, source_start, source_end,
+                evidence_json, merge_status, sort_order)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'BODY', %s)""",
             (section_id, doc_id, section_name, section_text,
-             chunk_id, source_anchor, json.dumps(evidence, ensure_ascii=False),
+             chunk_id, source_anchor, chunk_char_start, chunk_char_end,
+             json.dumps(evidence, ensure_ascii=False),
              chunk["chunk_index"])
         )
 
@@ -3692,11 +3728,13 @@ def get_source_map(doc_id: str):
         raise HTTPException(status_code=404, detail="Document not found")
 
     try:
-        cursor.execute("""SELECT section_name, source_chunk_id, section_text, source_anchor
+        cursor.execute("""SELECT section_name, source_chunk_id, section_text, source_anchor,
+                                 source_start, source_end
                           FROM manual_sections WHERE doc_id = %s
                           ORDER BY sort_order, section_id""", (doc_id,))
     except Exception:
-        cursor.execute("""SELECT section_name, source_chunk_id, section_text, NULL as source_anchor
+        cursor.execute("""SELECT section_name, source_chunk_id, section_text,
+                                 NULL as source_anchor, NULL as source_start, NULL as source_end
                           FROM manual_sections WHERE doc_id = %s
                           ORDER BY sort_order, section_id""", (doc_id,))
     sections = cursor.fetchall()
@@ -3728,12 +3766,22 @@ def get_source_map(doc_id: str):
     source_map = {}
     matched_count = 0
     anchor_used = 0
+    position_used = 0
     fallback_sections = []
 
     for section in sections:
         name = section["section_name"]
         anchor = section["source_anchor"] or ""
         chunk_id = section["source_chunk_id"]
+        src_start = section.get("source_start")
+        src_end = section.get("source_end")
+
+        # === Priority 0: position-based matching (most accurate) ===
+        if src_start is not None and src_end is not None and src_end > src_start:
+            source_map[name] = raw_text[src_start:src_end]
+            matched_count += 1
+            position_used += 1
+            continue
 
         # === Priority 1: source_anchor based matching ===
         if anchor and len(anchor) >= 10:
@@ -3813,7 +3861,7 @@ def get_source_map(doc_id: str):
                 if region:
                     matched_count += 1
 
-    return {"source_map": source_map, "matched": matched_count, "anchor_used": anchor_used}
+    return {"source_map": source_map, "matched": matched_count, "anchor_used": anchor_used, "position_used": position_used}
 
 
 @router.get("/doc/{doc_id}/issues")
