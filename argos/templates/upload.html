@@ -13,6 +13,7 @@
             </select>
             <span id="main-mode-info" style="color:#9ca3af;font-size:11px;"></span>
             <button id="main-llm-lock" onclick="toggleLlmLock()" title="LLM 설정 잠금" style="padding:2px 8px;border-radius:12px;font-size:14px;border:1px solid #d1d5db;background:#fff;cursor:pointer;">🔓</button>
+            <a href="/ui/prompts" title="LLM 프롬프트 설정" style="padding:2px 8px;border-radius:12px;font-size:14px;border:1px solid #d1d5db;background:#fff;cursor:pointer;text-decoration:none;display:inline-block;">⚙️</a>
         </div>
     </div>
 
@@ -90,13 +91,7 @@
                 <td class="actions-cell">
                     {% if doc.status != 'ARCHIVED' %}
                     <button class="btn-small btn-extract" onclick="extractText('{{ doc.doc_id }}')">📄 Extract</button>
-                    {% if doc.has_manual %}
-                    <button class="btn-small btn-view-manual" onclick="openEditor('{{ doc.doc_id }}')">📖 매뉴얼
-                        보기</button>
-                    {% else %}
-                    <button class="btn-small btn-manualize" onclick="manualize('{{ doc.doc_id }}')">📝
-                        Manualize</button>
-                    {% endif %}
+                    <button class="btn-small btn-manualize" onclick="openEditorOrManualize('{{ doc.doc_id }}', {{ 'true' if doc.has_manual else 'false' }})">🔧 RAG화 전가공</button>
                     {% if doc.has_rag %}
                     <button class="btn-small btn-approve" disabled style="opacity:0.5;cursor:not-allowed;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;">✓ RAG 완료</button>
                     {% else %}
@@ -118,6 +113,7 @@
         </tbody>
     </table>
 </section>
+
 
 <!-- Result Modal -->
 <div id="result-modal" class="modal" style="display:none;">
@@ -156,7 +152,7 @@
 
         <div class="editor-footer">
             <button class="btn" style="background:#9ca3af;" onclick="closeEditor()">취소</button>
-            <button class="btn" style="background:#f59e0b;" onclick="manualize(currentDocId, true)">🔄 다시 Manualize</button>
+            <button id="btn-manualize-editor" class="btn" style="background:#f59e0b;" onclick="editorManualize()">▶ Manualize</button>
             <button id="btn-fill-all" class="btn" style="background:#10b981;" onclick="fillAll()">① 맥락 보강(전체)</button>
             <button id="btn-refine-all" class="btn" style="background:#6366f1;" onclick="refineAll()">② RAG 최적화(전체)</button>
             <button id="btn-gate-all" class="btn" style="background:#f59e0b;" onclick="gateAll()">③ Gate(전체)</button>
@@ -266,7 +262,21 @@
                 body: `model=${encodeURIComponent(model)}`
             });
             const data = await res.json();
-            if (data.success) updateModeUI(data.info?.mode, data.info);
+            if (data.success) {
+                updateModeUI(data.info?.mode, data.info);
+            } else {
+                // 잠금 등으로 실패 시 실제 서버 모델로 드롭다운 동기화
+                const actual = await fetch('/api/llm/model');
+                const ad = await actual.json();
+                if (ad.model) {
+                    for (const selId of MODEL_SELECT_IDS) {
+                        const sel = document.getElementById(selId);
+                        if (sel) sel.value = ad.model;
+                    }
+                    localStorage.setItem('editor_model', ad.model);
+                    updateModeUI(ad.info?.mode, ad.info);
+                }
+            }
         } catch(e) { console.warn('Model switch failed:', e); }
     }
 
@@ -309,7 +319,7 @@
             const res = await fetch('/api/llm/models');
             const data = await res.json();
             const selected = _populateAllSelects(data.models, data.current);
-            if (selected) await _setServerModel(selected);
+            if (selected && !_llmLocked) await _setServerModel(selected);
         } catch(e) {
             console.warn('Model list load failed:', e);
             for (const selId of MODEL_SELECT_IDS) {
@@ -384,38 +394,42 @@
 
     // On page load
     document.addEventListener('DOMContentLoaded', async () => {
+        await loadLockState();
         try {
             const res = await fetch('/api/llm/mode');
             const data = await res.json();
             updateModeUI(data.mode, data.info);
         } catch(e) {}
         await loadModelList();
-        await loadLockState();
     });
 
     async function manualize(docId, force = false) {
         currentDocId = docId;
 
-        // Step 1: Check for existing sections (non-force only)
+        // Step 1: Quick count check for existing sections (non-force only)
         if (!force) {
-            showModal('확인 중...', '기존 매뉴얼 데이터 확인 중...');
-            const secRes = await fetch(`/api/doc/${docId}/sections`);
-            const secData = await secRes.json();
-            const existingSections = secData.sections || secData;
-            const completedPhases = secData.completed_phases || '';
-            if (existingSections && existingSections.length > 0) {
-                const details = {};
-                existingSections.forEach(s => details[s.section_name] = s.section_text);
-                closeModal();
+            const chkRes = await fetch(`/api/doc/${docId}/sections?check=1`);
+            const chkData = await chkRes.json();
+            if (chkData.count > 0) {
+                const completedPhases = chkData.completed_phases || '';
                 showConfirmModalForCache(
                     '이미 매뉴얼화가 완료되었습니다',
-                    `이미 생성된 섹션(${existingSections.length}개)이 있습니다. 어떻게 하시겠습니까?`,
-                    () => { openEditorWithData(docId, { section_details: details, todo_questions: [], sections_gate: existingSections }); _restorePhases(completedPhases, existingSections.length); },
+                    `이미 생성된 섹션(${chkData.count}개)이 있습니다. 어떻게 하시겠습니까?`,
+                    async () => {
+                        showModal('로딩 중...', '섹션 데이터를 불러오는 중...');
+                        const secRes = await fetch(`/api/doc/${docId}/sections`);
+                        const secData = await secRes.json();
+                        const existingSections = secData.sections || secData;
+                        const details = {};
+                        existingSections.forEach(s => details[s.section_name] = s.section_text);
+                        closeModal();
+                        openEditorWithData(docId, { section_details: details, todo_questions: [], sections_gate: existingSections });
+                        _restorePhases(completedPhases, existingSections.length);
+                    },
                     () => manualize(docId, true)
                 );
                 return;
             }
-            closeModal();
         }
 
         // Step 2: Pre-fetch char count, show Manualizing lamp + timer
@@ -534,6 +548,8 @@
                 lamp.style.cssText = 'display:inline;background:#dcfce7;color:#166534;animation:none;padding:2px 10px;border-radius:8px;font-size:12px;font-weight:700;';
                 setTimeout(() => { lamp.style.display = 'none'; lamp.style.cssText = ''; }, 8000);
             }
+            // Manualize 완료 후 에디터 파이프라인 버튼 활성화
+            _setEditorButtonsEnabled(true);
         } catch(e) {
             _cleanup();
             const elapsed = _elapsed();
@@ -650,8 +666,8 @@
     function openEditorWithData(docId, data) {
         currentDocId = docId;
         sourceMapCache = null;
-        // RAG 반영 버튼 초기화: 항상 disabled로 시작
-        _disableBtn('btn-publish-all', '📦 RAG 반영');
+        // 파이프라인 버튼 활성화 (빈 에디터에서 비활성화된 경우 복원)
+        _setEditorButtonsEnabled(true);
         // Load model list and restore saved selection
         loadModelList();
         const container = document.getElementById('editor-container');
@@ -753,6 +769,7 @@
                         <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
                         <button class="btn-small" style="background:#94a3b8;color:white;font-size:11px;" onclick="toggleMoreBtns(${idx})">⋯ 더보기</button>
                         <span id="more-btns-${idx}" style="display:none; gap:0.25rem; align-items:center;">
+                            <button id="btn-manualize-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="manualizeSection(${idx})">▶ Manualize</button>
                             <button id="btn-fill-${idx}" class="btn-small" ${fillDisabled} onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                             <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">② RAG 최적화</button>
                             <button id="btn-gate-${idx}" class="btn-small" style="background:#f59e0b;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
@@ -806,6 +823,125 @@
         const container = document.getElementById('editor-container');
         container.innerHTML = '';
         document.getElementById('editor-modal').style.display = 'flex';
+        _setEditorButtonsEnabled(true);
+    }
+
+    // ── 에디터 통합 진입점 ──
+
+    function openEditorOrManualize(docId, hasManual) {
+        if (hasManual) {
+            openEditor(docId);
+        } else {
+            openEditorEmpty(docId);
+        }
+    }
+
+    function openEditorEmpty(docId) {
+        currentDocId = docId;
+        sourceMapCache = null;
+        loadModelList();
+        const container = document.getElementById('editor-container');
+        container.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:center;min-height:200px;">
+                <div style="text-align:center;color:#6b7280;line-height:2;">
+                    <div style="font-size:15px;font-weight:600;">아직 매뉴얼화가 되지 않았습니다.</div>
+                    <div>아래 "<strong>▶ Manualize</strong>" 버튼을 눌러 AI 구조화를 시작하세요.</div>
+                </div>
+            </div>`;
+        document.getElementById('editor-modal').style.display = 'flex';
+        // Manualize만 활성화, 나머지 비활성화
+        _setEditorButtonsEnabled(false);
+    }
+
+    function _setEditorButtonsEnabled(enabled) {
+        const ids = ['btn-fill-all', 'btn-refine-all', 'btn-gate-all', 'save-editor-btn'];
+        ids.forEach(id => {
+            if (enabled) _enableBtn(id);
+            else _disableBtn(id);
+        });
+        _disableBtn('btn-publish-all', '📦 RAG 반영');
+        // Manualize 버튼은 항상 활성
+        _enableBtn('btn-manualize-editor', '▶ Manualize');
+    }
+
+    function editorManualize() {
+        if (!currentDocId) return;
+        // 기존 섹션이 있으면 확인
+        const container = document.getElementById('editor-container');
+        const existingSections = container.querySelectorAll('.editor-textarea');
+        if (existingSections.length > 0) {
+            if (!confirm(`기존 ${existingSections.length}개 섹션이 덮어씌워집니다. 계속하시겠습니까?`)) return;
+        }
+        manualize(currentDocId, true);
+    }
+
+    async function manualizeSection(idx) {
+        const textarea = document.getElementById(`editor-${idx}`);
+        if (!textarea || !currentDocId) return;
+        const sectionName = textarea.dataset.sectionName;
+        const originalText = textarea.value;
+        const btn = document.getElementById(`btn-manualize-${idx}`);
+
+        if (!confirm(`"${sectionName}" 섹션을 AI로 다시 구조화합니다. 계속하시겠습니까?`)) return;
+
+        // 타이머
+        const t0 = Date.now();
+        const timerIv = setInterval(() => {
+            const sec = (Date.now() - t0) / 1000;
+            const m = Math.floor(sec / 60);
+            const s = (sec % 60).toFixed(1);
+            if (btn) btn.textContent = `▶ Manualize 중... ${m > 0 ? m + ':' + s.padStart(4,'0') : s + 's'}`;
+        }, 100);
+
+        if (btn) { btn.disabled = true; btn.textContent = '▶ Manualize 중... 0.0s'; }
+        _markSectionWorking(idx, 'Manualize 중…');
+        textarea.value = "AI가 재구조화 중입니다...";
+        textarea.disabled = true;
+        autoResize(textarea);
+
+        try {
+            const res = await fetch(`/api/doc/${currentDocId}/manualize-section`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section_name: sectionName, text: originalText })
+            });
+            const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+            let result;
+            try { result = await res.json(); } catch(_) { result = { detail: `서버 오류 (HTTP ${res.status})` }; }
+
+            textarea.disabled = false;
+            if (res.ok && result.success) {
+                // 바로 텍스트 교체 (팝업 없음)
+                textarea.value = result.section_text;
+                autoResize(textarea);
+                // gate stale 표시
+                textarea.dataset.gateStatus = '';
+                const staleHint = document.querySelector(`#section-card-${idx} [style*="color:#d97706"]`);
+                if (!staleHint) {
+                    const card = document.getElementById(`section-card-${idx}`);
+                    if (card) {
+                        const hint = document.createElement('div');
+                        hint.style.cssText = 'font-size:12px;color:#d97706;margin-bottom:6px;';
+                        hint.textContent = '⚠️ 변경됨: Gate 재검증 필요';
+                        card.querySelector('.section-row')?.before(hint);
+                    }
+                }
+            } else {
+                textarea.value = originalText;
+                autoResize(textarea);
+                alert(`섹션 Manualize 실패 (${elapsed}s): ${result.detail || '알 수 없는 오류'}`);
+            }
+        } catch(e) {
+            textarea.disabled = false;
+            textarea.value = originalText;
+            autoResize(textarea);
+            alert('섹션 Manualize 실패: ' + e.message);
+        } finally {
+            clearInterval(timerIv);
+            if (btn) { btn.disabled = false; btn.textContent = '▶ Manualize'; }
+            const badge = document.getElementById(`phase-done-${idx}`);
+            if (badge) { badge.classList.remove('badge-working'); if (badge.textContent.includes('중…')) badge.style.display = 'none'; }
+        }
     }
 
     function _appendSectionCard(name, text, idx) {
@@ -825,6 +961,7 @@
                     <button class="btn-small" style="background:#64748b;color:white;" onclick="toggleSectionSource(${idx})">📄 원본 비교</button>
                     <button class="btn-small" style="background:#94a3b8;color:white;font-size:11px;" onclick="toggleMoreBtns(${idx})">⋯ 더보기</button>
                     <span id="more-btns-${idx}" style="display:none; gap:0.25rem; align-items:center;">
+                        <button id="btn-manualize-${idx}" class="btn-small" style="background:#8b5cf6;color:white;" onclick="manualizeSection(${idx})">▶ Manualize</button>
                         <button id="btn-fill-${idx}" class="btn-small" style="background:#10b981;color:white;" onclick="aiRefine(${idx}, 'fill')">① 맥락 보강</button>
                         <button id="btn-refine-${idx}" class="btn-small" style="background:#6366f1;color:white;" onclick="aiRefine(${idx}, 'refine')">② RAG 최적화</button>
                         <button id="btn-gate-${idx}" class="btn-small" style="background:#f59e0b;color:white;" onclick="gateSectionUI(${idx})">③ Gate 검증</button>
@@ -945,7 +1082,7 @@
     function openCompare(idx, sectionName, before, after, task) {
         compareTargetIdx = idx;
         compareTargetTask = task;
-        const taskLabel = task === 'refine' ? '② RAG 최적화' : '① 맥락 보강';
+        const taskLabel = task === 'refine' ? '② RAG 최적화' : task === 'manualize' ? '▶ Manualize' : '① 맥락 보강';
         const titleEl = document.getElementById('compare-title');
         // 변경 없으면 안내
         const trimBefore = before.trim();
@@ -2320,6 +2457,8 @@
         // 추출/매뉴얼라이즈 진행 중이면 배경 클릭으로 닫지 않음
         if (e.target === this && !document.getElementById('extract-header')?.querySelector('.spinner') && !document.getElementById('manualize-status')?.offsetParent) closeModal(true);
     });
+
+    // Prompt settings moved to /ui/prompts page
 </script>
 
 <style>
@@ -2451,10 +2590,6 @@
 
     .btn-manualize {
         background: #8b5cf6;
-    }
-
-    .btn-view-manual {
-        background: #3b82f6;
     }
 
     .btn-gate {
@@ -2665,5 +2800,6 @@
             grid-template-columns: 1fr;
         }
     }
+
 </style>
 {% endblock %}

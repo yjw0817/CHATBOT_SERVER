@@ -18,6 +18,52 @@ router = APIRouter(prefix="/api", tags=["api"])
 UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# --- Custom prompt management (prompts.json) ---
+_PROMPTS_PATH = Path(__file__).parent.parent / "prompts.json"
+
+
+def _load_custom_prompts() -> dict:
+    """Load custom prompts from prompts.json. Returns {} if missing or invalid."""
+    try:
+        if _PROMPTS_PATH.exists():
+            return json.loads(_PROMPTS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_custom_prompts(data: dict):
+    """Write custom prompts to prompts.json."""
+    _PROMPTS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+import re as _re
+
+def _safe_format(template: str, **kwargs) -> str:
+    """Replace only known {key} placeholders, leaving other braces untouched."""
+    def _replacer(m):
+        key = m.group(1)
+        if key in kwargs:
+            return str(kwargs[key])
+        return m.group(0)  # leave unknown placeholders as-is
+    return _re.sub(r'\{(\w+)\}', _replacer, template)
+
+
+def _get_effective_prompt(step: str) -> str:
+    """Return the effective override prompt for the current model + step.
+
+    Looks up the model's assignment for *step*; if a version name is assigned
+    and the version content exists, return it.  Otherwise return '' (= use
+    the hard-coded default prompt).
+    """
+    model = get_llm_model()
+    data = _load_custom_prompts()
+    version_name = (data.get("assignments", {}).get(model, {}) or {}).get(step)
+    if not version_name:
+        return ""
+    return data.get("versions", {}).get(step, {}).get(version_name, "")
+
+
 # Import unified LLM client
 from llm_client import call_llm, is_llm_available, get_llm_info, LLM_MODEL, set_llm_mode, get_llm_mode, set_llm_model, get_llm_model, ping_llm, call_vision_llm, is_llm_locked, set_llm_lock
 
@@ -45,10 +91,100 @@ def get_lock():
 
 
 @router.post("/llm/lock")
-def toggle_lock(locked: bool = Form(...)):
+def toggle_lock(locked: str = Form(...)):
     """Set LLM lock state."""
-    set_llm_lock(locked)
+    val = locked.lower() in ("true", "1", "yes")
+    set_llm_lock(val)
     return {"success": True, "locked": is_llm_locked()}
+
+
+_VALID_STEPS = ("manualize", "fill", "refine", "gate")
+
+_DEFAULT_PROMPTS_CACHE: dict = {}  # filled lazily
+
+
+def _get_default_prompts() -> dict:
+    """Return the hard-coded default prompt text for each step (read-only)."""
+    if not _DEFAULT_PROMPTS_CACHE:
+        _DEFAULT_PROMPTS_CACHE["manualize"] = {
+            "text": MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT,
+            "placeholders": ["{raw_text}"],
+        }
+        _DEFAULT_PROMPTS_CACHE["fill"] = {
+            "text": FILL_SECTION_TEXT_PROMPT_V3,
+            "placeholders": ["{section_text}", "{raw_text}", "{qa_policy_text}"],
+        }
+        _DEFAULT_PROMPTS_CACHE["refine"] = {
+            "text": FINALIZE_SECTION_TEXT_PROMPT_V1,
+            "placeholders": ["{section_text}", "{raw_text}"],
+        }
+        _DEFAULT_PROMPTS_CACHE["gate"] = {
+            "text": QUALITY_GATE_PROMPT,
+            "placeholders": ["{sections_text}"],
+        }
+    return _DEFAULT_PROMPTS_CACHE
+
+
+@router.get("/llm/prompts")
+def get_prompts():
+    """Return versions + assignments + current_model + default prompt previews."""
+    data = _load_custom_prompts()
+    return {
+        "versions": data.get("versions", {step: {} for step in _VALID_STEPS}),
+        "assignments": data.get("assignments", {}),
+        "current_model": get_llm_model(),
+    }
+
+
+@router.get("/llm/prompts/defaults")
+def get_default_prompts():
+    """Return the 4 hard-coded default prompts (read-only, for UI display)."""
+    defaults = _get_default_prompts()
+    return {step: info for step, info in defaults.items()}
+
+
+@router.post("/llm/prompts/version")
+def save_prompt_version(step: str = Form(...), name: str = Form(...), content: str = Form(...)):
+    """Create or update a named prompt version for a step."""
+    if step not in _VALID_STEPS:
+        raise HTTPException(status_code=400, detail=f"Invalid step: {step}")
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Version name is required")
+    data = _load_custom_prompts()
+    data.setdefault("versions", {s: {} for s in _VALID_STEPS})
+    data["versions"].setdefault(step, {})[name.strip()] = content
+    _save_custom_prompts(data)
+    return {"success": True}
+
+
+@router.delete("/llm/prompts/version")
+def delete_prompt_version(step: str = Form(...), name: str = Form(...)):
+    """Delete a named prompt version. Clears any assignments referencing it."""
+    if step not in _VALID_STEPS:
+        raise HTTPException(status_code=400, detail=f"Invalid step: {step}")
+    data = _load_custom_prompts()
+    versions = data.get("versions", {})
+    if step in versions and name in versions[step]:
+        del versions[step][name]
+    # Null-out any assignments that referenced this version
+    for model_assignments in data.get("assignments", {}).values():
+        if isinstance(model_assignments, dict) and model_assignments.get(step) == name:
+            model_assignments[step] = None
+    _save_custom_prompts(data)
+    return {"success": True}
+
+
+@router.post("/llm/prompts/assign")
+def assign_prompt_version(model: str = Form(...), step: str = Form(...), version: str = Form(None)):
+    """Assign a prompt version to a model+step. version=null or empty means use default."""
+    if step not in _VALID_STEPS:
+        raise HTTPException(status_code=400, detail=f"Invalid step: {step}")
+    data = _load_custom_prompts()
+    data.setdefault("assignments", {})
+    data["assignments"].setdefault(model, {s: None for s in _VALID_STEPS})
+    data["assignments"][model][step] = version if version else None
+    _save_custom_prompts(data)
+    return {"success": True}
 
 
 @router.get("/llm/mode")
@@ -803,6 +939,7 @@ raw_text: {raw_text}
 
 1) 정보 삭제 금지
 - 원문에 있는 항목/리스트/문장을 임의로 제거하지 마세요.
+- 단, [참고: ...] 및 [이미지 설명: ...] 태그는 반드시 제거하고, 그 안의 정보만 매뉴얼 문체로 녹여 쓰세요.
 
 2) 정보 압축 금지
 - 여러 항목을 하나로 합쳐 줄이지 마세요.
@@ -849,6 +986,7 @@ S1-R1, S1-R2… 순서 고정
 - 원문 문장을 최대한 유지
 - 과도한 재작성 금지
 - 정보 추가 금지
+- [참고: ...] 및 [이미지 설명: ...] 태그는 bullets에 포함하지 말고, 내용만 활용하여 서술
 
 [source_quotes]
 
@@ -1037,7 +1175,12 @@ def manualize(doc_id: str, force: bool = False):
 
 def _manualize_single(raw_text: str, doc_id: str) -> dict:
     """Single LLM call with full raw_text. Returns {section_name: {"text": ..., "source_anchor": ...}}."""
-    content = call_llm(MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_text), temperature=0.3)
+    override = _get_effective_prompt("manualize")
+    if override:
+        prompt = _safe_format(override, raw_text=raw_text)
+    else:
+        prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_text)
+    content = call_llm(prompt, temperature=0.3)
     if not content:
         raise Exception("LLM 응답이 비어있습니다.")
 
@@ -1116,7 +1259,12 @@ def _process_one_window(window_text: str, idx: int, total: int) -> dict:
     fallback = {fallback_name: {"text": window_text, "source_anchor": ""}}
 
     try:
-        content = call_llm(MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=window_text), temperature=0.3)
+        override = _get_effective_prompt("manualize")
+        if override:
+            prompt = _safe_format(override, raw_text=window_text)
+        else:
+            prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=window_text)
+        content = call_llm(prompt, temperature=0.3)
         if not content:
             print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
             return fallback
@@ -1934,11 +2082,19 @@ def fill_all(doc_id: str):
         section_name = sec["section_name"]
         try:
             qa_policy_text = "Q&A는 새로 추가하지 마세요. 기존 Q&A만 유지/정리하세요."
-            prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
-                section_text=sec["section_text"],
-                raw_text=raw_text_safe,
-                qa_policy_text=qa_policy_text
-            )
+            override = _get_effective_prompt("fill")
+            if override:
+                prompt = _safe_format(override,
+                    section_text=sec["section_text"],
+                    raw_text=raw_text_safe,
+                    qa_policy_text=qa_policy_text
+                )
+            else:
+                prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
+                    section_text=sec["section_text"],
+                    raw_text=raw_text_safe,
+                    qa_policy_text=qa_policy_text
+                )
             result = call_llm(prompt, temperature=0.3)
             if result and result.strip():
                 cursor.execute(
@@ -1989,10 +2145,17 @@ def refine_all(doc_id: str):
     for sec in all_sections:
         section_name = sec["section_name"]
         try:
-            prompt = FINALIZE_SECTION_TEXT_PROMPT_V1.format(
-                section_text=sec["section_text"],
-                raw_text=raw_text_safe
-            )
+            override = _get_effective_prompt("refine")
+            if override:
+                prompt = _safe_format(override,
+                    section_text=sec["section_text"],
+                    raw_text=raw_text_safe
+                )
+            else:
+                prompt = FINALIZE_SECTION_TEXT_PROMPT_V1.format(
+                    section_text=sec["section_text"],
+                    raw_text=raw_text_safe
+                )
             result = call_llm(prompt, temperature=0.3)
             if result and result.strip():
                 cursor.execute(
@@ -2221,7 +2384,12 @@ def quality_gate(doc_id: str):
     llm_error_msg = None
     if is_llm_available() and len(issues) < 5:
         try:
-            content = call_llm(QUALITY_GATE_PROMPT.format(sections_text=sections_text[:6000]), temperature=0.3)
+            override_gate = _get_effective_prompt("gate")
+            if override_gate:
+                gate_prompt = _safe_format(override_gate, sections_text=sections_text[:6000])
+            else:
+                gate_prompt = QUALITY_GATE_PROMPT.format(sections_text=sections_text[:6000])
+            content = call_llm(gate_prompt, temperature=0.3)
             if content:
                 json_match = re.search(r'\[[\s\S]*\]', content)
                 if json_match:
@@ -2282,6 +2450,82 @@ def update_sections(doc_id: str, req: SectionsUpdate):
     conn.close()
     
     return {"success": True, "doc_id": doc_id}
+
+
+# ============ SECTION-LEVEL MANUALIZE ============
+
+class ManualizeSectionRequest(BaseModel):
+    section_name: str
+    text: str  # 현재 섹션 텍스트 (프론트에서 전달)
+
+
+@router.post("/doc/{doc_id}/manualize-section")
+def manualize_section(doc_id: str, req: ManualizeSectionRequest):
+    """Re-manualize a single section. refine-text와 동일한 패턴:
+    섹션 텍스트 + raw_text 컨텍스트를 LLM에 전달."""
+    if not is_llm_available():
+        raise HTTPException(status_code=503, detail="LLM 사용 불가")
+
+    # 1) raw_text 조회 후 즉시 닫기
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
+    doc = cursor.fetchone()
+    conn.close()
+
+    if not doc or not doc["raw_text"]:
+        raise HTTPException(status_code=400, detail="원본 텍스트가 없습니다.")
+
+    raw_text = doc["raw_text"][:30000]
+
+    # 2) LLM 호출 — 기존 manualize 프롬프트에 섹션 텍스트를 raw_text로 전달
+    try:
+        override = _get_effective_prompt("manualize")
+        if override:
+            prompt = _safe_format(override, raw_text=req.text)
+        else:
+            prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=req.text)
+
+        print(f"[MANUALIZE-SECTION] '{req.section_name}' ({len(req.text)} chars)")
+        content = call_llm(prompt, temperature=0.3)
+        if not content:
+            raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM 호출 실패: {e}")
+
+    # 3) 응답 처리 — JSON이면 파싱, 아니면 텍스트 그대로
+    text_val = content.strip()
+    try:
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            parsed = _clean_llm_json(json_match.group())
+            sections_map = _flatten_manualize_json(parsed)
+            if sections_map:
+                # 첫 번째 섹션의 텍스트 사용
+                first_data = list(sections_map.values())[0]
+                text_val = first_data.get("text", content) if isinstance(first_data, dict) else str(first_data)
+    except Exception:
+        pass  # JSON 파싱 실패 시 LLM 텍스트 그대로 사용
+
+    # 4) DB 저장 (source_anchor 보존)
+    try:
+        conn2 = get_connection()
+        cursor2 = conn2.cursor()
+        cursor2.execute(
+            """UPDATE manual_sections
+               SET section_text = %s, ai_text = %s,
+                   gate_status = NULL, gate_score = NULL, gate_reasons_json = NULL, gate_stale = 0
+               WHERE doc_id = %s AND section_name = %s""",
+            (text_val, text_val, doc_id, req.section_name)
+        )
+        conn2.commit()
+        conn2.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB 저장 실패: {e}")
+
+    return {"success": True, "section_name": req.section_name, "section_text": text_val}
 
 
 # ============ STEP 2: AI HELPER (Fill/Refine) ============
@@ -2355,6 +2599,10 @@ def _flatten_manualize_json(parsed: dict) -> dict:
             for exc_item in st.get("exceptions", []):
                 lines.append(f"- 예외: {exc_item}")
         section_text = "\n".join(lines)
+        # 후처리: [이미지 설명: ...] 및 [참고: ...] 태그 강제 제거
+        section_text = re.sub(r'\[이미지 설명:\s*.*?\]', '', section_text, flags=re.DOTALL)
+        section_text = re.sub(r'\[참고:\s*.*?\]', '', section_text, flags=re.DOTALL)
+        section_text = re.sub(r'\n{3,}', '\n\n', section_text).strip()
         sections_map[name] = {"text": section_text, "source_anchor": anchor}
     # Fallback: if no sections parsed, try summary
     if not sections_map:
@@ -3014,23 +3262,47 @@ def refine_text(doc_id: str, req: RefineRequest):
                 if allow_qa else
                 "Q&A는 새로 추가하지 마세요. 기존 Q&A만 유지/정리하세요."
             )
-            prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
-                section_text=req.text,
-                raw_text=raw_text_safe,
-                qa_policy_text=qa_policy_text
-            )
+            override = _get_effective_prompt("fill")
+            if override:
+                prompt = _safe_format(override,
+                    section_text=req.text,
+                    raw_text=raw_text_safe,
+                    qa_policy_text=qa_policy_text
+                )
+            else:
+                prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
+                    section_text=req.text,
+                    raw_text=raw_text_safe,
+                    qa_policy_text=qa_policy_text
+                )
         elif req.task == "refine":
-            prompt = FINALIZE_SECTION_TEXT_PROMPT_V1.format(
-                section_text=req.text,
-                raw_text=raw_text_safe
-            )
+            override = _get_effective_prompt("refine")
+            if override:
+                prompt = _safe_format(override,
+                    section_text=req.text,
+                    raw_text=raw_text_safe
+                )
+            else:
+                prompt = FINALIZE_SECTION_TEXT_PROMPT_V1.format(
+                    section_text=req.text,
+                    raw_text=raw_text_safe
+                )
         else:
             # recommend: use fill prompt with Q&A disabled
-            prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
-                section_text=req.text,
-                raw_text=raw_text_safe,
-                qa_policy_text="Q&A는 새로 추가하지 마세요. 기존 Q&A만 유지/정리하세요."
-            )
+            override = _get_effective_prompt("fill")
+            qa_disabled = "Q&A는 새로 추가하지 마세요. 기존 Q&A만 유지/정리하세요."
+            if override:
+                prompt = _safe_format(override,
+                    section_text=req.text,
+                    raw_text=raw_text_safe,
+                    qa_policy_text=qa_disabled
+                )
+            else:
+                prompt = FILL_SECTION_TEXT_PROMPT_V3.format(
+                    section_text=req.text,
+                    raw_text=raw_text_safe,
+                    qa_policy_text=qa_disabled
+                )
 
         suggestion = call_llm(prompt, temperature=0.3)
         return {"success": True, "suggestion": suggestion}
@@ -3286,10 +3558,21 @@ def reindex(doc_id: str):
 # ============ STEP 2: GET SECTIONS ============
 
 @router.get("/doc/{doc_id}/sections")
-def get_sections(doc_id: str):
-    """Get manual sections for a document (includes chunk-based fields)."""
+def get_sections(doc_id: str, check: int = 0):
+    """Get manual sections for a document (includes chunk-based fields).
+
+    ?check=1  → lightweight: returns only count + completed_phases (no section text).
+    """
     conn = get_connection()
     cursor = conn.cursor()
+    if check:
+        cursor.execute("SELECT COUNT(*) AS cnt FROM manual_sections WHERE doc_id = %s", (doc_id,))
+        cnt = cursor.fetchone()["cnt"]
+        cursor.execute("SELECT completed_phases FROM documents WHERE doc_id = %s", (doc_id,))
+        doc_row = cursor.fetchone()
+        completed_phases = (doc_row["completed_phases"] or "") if doc_row else ""
+        conn.close()
+        return {"count": cnt, "completed_phases": completed_phases}
     cursor.execute("""SELECT section_name, section_text, gate_status, gate_reasons_json, gate_stale,
                              evidence_json, source_chunk_id, merge_status
                       FROM manual_sections WHERE doc_id = %s
