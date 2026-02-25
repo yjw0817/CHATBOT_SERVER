@@ -2457,43 +2457,20 @@ def update_sections(doc_id: str, req: SectionsUpdate):
 class ManualizeSectionRequest(BaseModel):
     section_name: str
     text: str  # 현재 섹션 텍스트 (프론트에서 전달)
-    preview: bool = False  # True이면 LLM 호출 없이 보낼 원본 영역만 반환
+    raw_window: str = ""  # 프론트에서 source-map으로 가져온 원본 텍스트
 
 
 @router.post("/doc/{doc_id}/manualize-section")
 def manualize_section(doc_id: str, req: ManualizeSectionRequest):
     """Re-manualize a single section.
-    source-map API와 동일한 로직으로 원본 raw_text 영역을 찾아 LLM에 전달."""
-    if not is_llm_available() and not req.preview:
+    프론트엔드가 source-map에서 가져온 원본(raw_window)을 그대로 LLM에 전달."""
+    if not is_llm_available():
         raise HTTPException(status_code=503, detail="LLM 사용 불가")
 
-    # 1) source-map 호출 — 원본 비교와 완전히 동일한 매칭 결과 사용
-    try:
-        sm_result = get_source_map(doc_id)
-    except HTTPException:
-        raise
-    source_map = sm_result.get("source_map", {})
-    raw_window = source_map.get(req.section_name, "")
-
+    # 프론트에서 보낸 원본 사용 (원본 비교와 동일한 데이터)
+    raw_window = req.raw_window
     if not raw_window:
-        # source-map에서도 못 찾은 경우: raw_text 폴백
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT raw_text FROM documents WHERE doc_id = %s", (doc_id,))
-        doc = cursor.fetchone()
-        conn.close()
-        if not doc or not doc["raw_text"]:
-            raise HTTPException(status_code=400, detail="원본 텍스트가 없습니다.")
-        raw_window = doc["raw_text"][:15000]
-
-    # preview 모드: LLM 호출 없이 보낼 내용만 반환
-    if req.preview:
-        return {
-            "success": True, "preview": True,
-            "section_name": req.section_name,
-            "raw_window": raw_window,
-            "raw_window_len": len(raw_window),
-        }
+        raise HTTPException(status_code=400, detail="원본 텍스트(raw_window)가 전달되지 않았습니다.")
 
     # 3) LLM 호출 — 원본 raw_text 영역을 manualize 프롬프트에 전달
     try:
@@ -2503,7 +2480,7 @@ def manualize_section(doc_id: str, req: ManualizeSectionRequest):
         else:
             prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=raw_window)
 
-        print(f"[MANUALIZE-SECTION] '{req.section_name}' window={len(raw_window)} chars (source-map)")
+        print(f"[MANUALIZE-SECTION] '{req.section_name}' raw_window={len(raw_window)} chars")
         content = call_llm(prompt, temperature=0.3)
         if not content:
             raise HTTPException(status_code=502, detail="LLM 응답이 비어있습니다.")

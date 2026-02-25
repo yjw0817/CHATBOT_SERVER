@@ -882,19 +882,13 @@
         const originalText = textarea.value;
         const btn = document.getElementById(`btn-manualize-${idx}`);
 
-        // [임시] preview: LLM에 보낼 원본 영역을 먼저 확인
-        try {
-            const prevRes = await fetch(`/api/doc/${currentDocId}/manualize-section`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ section_name: sectionName, text: originalText, preview: true })
-            });
-            const prev = await prevRes.json();
-            if (!prevRes.ok) { alert('미리보기 실패: ' + (prev.detail || '오류')); return; }
+        // source-map에서 원본 가져오기 (원본 비교와 동일한 데이터)
+        const sm = await loadSourceMap();
+        const rawWindow = sm?.source_map?.[sectionName] || '';
 
-            const info = `[섹션] ${sectionName}\n[anchor] ${prev.anchor || '(없음)'}\n[anchor 매칭] ${prev.anchor_found ? '✅ 성공' : '❌ 실패'}\n[원본 영역 길이] ${prev.raw_window_len}자\n\n──── 보낼 원본 내용 (앞 2000자) ────\n${(prev.raw_window || '').substring(0, 2000)}`;
-            if (!confirm(info + '\n\n이 내용으로 Manualize를 진행하시겠습니까?')) return;
-        } catch(e) { alert('미리보기 실패: ' + e.message); return; }
+        // [임시] preview: 보낼 원본 확인
+        const info = `[섹션] ${sectionName}\n[원본 길이] ${rawWindow.length}자\n\n──── 보낼 원본 내용 (앞 2000자) ────\n${rawWindow.substring(0, 2000)}`;
+        if (!confirm(info + '\n\n이 내용으로 Manualize를 진행하시겠습니까?')) return;
 
         // 타이머
         const t0 = Date.now();
@@ -915,7 +909,7 @@
             const res = await fetch(`/api/doc/${currentDocId}/manualize-section`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ section_name: sectionName, text: originalText })
+                body: JSON.stringify({ section_name: sectionName, text: originalText, raw_window: rawWindow })
             });
             const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
             let result;
