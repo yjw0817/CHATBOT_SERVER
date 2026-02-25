@@ -295,6 +295,7 @@
         const status = document.getElementById('test-status');
         const resultEl = document.getElementById('test-result');
         btn.disabled = true;
+        btn.classList.add('test-running');
         btn.textContent = '처리 중...';
         resultEl.style.display = 'none';
         const startTime = performance.now();
@@ -325,6 +326,7 @@
             status.textContent = '요청 실패: ' + e.message;
         } finally {
             btn.disabled = false;
+            btn.classList.remove('test-running');
             btn.textContent = '테스트';
         }
     }
@@ -395,6 +397,13 @@
         margin-bottom: -2px;
         position: relative;
         z-index: 1;
+    }
+    .test-running {
+        animation: pulse-btn 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-btn {
+        0%, 100% { opacity: 1; background: #fef3c7; }
+        50% { opacity: 0.6; background: #fde68a; }
     }
 </style>
 {% endblock %}
