@@ -46,19 +46,29 @@ def set_llm_mode(mode: str):
 
 
 def _update_env_value(key: str, value: str):
-    """Update a single key in .env file."""
+    """Update a single key in .env file.
+
+    Finds the active (uncommented) line for `key` and updates it.
+    If multiple uncommented lines exist, keeps only the first (updated).
+    Commented-out lines (#key=...) are left untouched.
+    """
     env_path = Path(__file__).parent / ".env"
     if not env_path.exists():
         env_path.write_text(f"{key}={value}\n", encoding="utf-8")
         return
     lines = env_path.read_text(encoding="utf-8").splitlines()
-    found = False
+    prefix = f"{key}="
+    active_idx = None
     for i, line in enumerate(lines):
-        if line.startswith(f"{key}=") or line.startswith(f"#{key}="):
-            lines[i] = f"{key}={value}"
-            found = True
-            break
-    if not found:
+        if line.startswith(prefix):
+            if active_idx is None:
+                lines[i] = f"{key}={value}"
+                active_idx = i
+            else:
+                # duplicate active line — comment out
+                lines[i] = f"#{line}"
+    if active_idx is None:
+        # no active line found — append new one
         lines.append(f"{key}={value}")
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -71,12 +81,13 @@ def get_llm_mode() -> str:
 
 
 def set_llm_model(model: str):
-    """Set LLM model at runtime."""
+    """Set LLM model at runtime. Also persists to .env."""
     global _runtime_model
     if _runtime_locked:
         raise RuntimeError("LLM 설정이 잠겨 있습니다. 잠금을 해제한 후 변경하세요.")
     _runtime_model = model
-    print(f"[LLM_CLIENT] Model switched to: {model}")
+    _update_env_value("LLM_MODEL", model)
+    print(f"[LLM_CLIENT] Model switched to: {model} (persisted to .env)")
 
 
 def get_llm_model() -> str:
@@ -232,7 +243,15 @@ def _call_ollama(prompt: str, temperature: float, config: dict) -> Optional[str]
         raise
     except Exception as e:
         elapsed = _time.time() - t0
+        # 에러 응답 본문 출력 (Ollama 500 원인 확인용)
+        resp_body = ""
+        try:
+            resp_body = resp.text[:500] if resp is not None else ""
+        except Exception:
+            pass
         print(f"[LLM_OLLAMA] ERROR {elapsed:.1f}s: {type(e).__name__}: {e}")
+        if resp_body:
+            print(f"[LLM_OLLAMA] RESPONSE_BODY: {resp_body}")
         raise
 
 
