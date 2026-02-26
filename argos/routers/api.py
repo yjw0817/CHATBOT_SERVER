@@ -209,19 +209,22 @@ def test_prompt(step: str = Form(...), prompt_text: str = Form(...), raw_text: s
 
     # JSON 파싱 + 읽기 좋은 형태로 변환
     display = content
+    is_json = False
     try:
         json_match = re.search(r'\{[\s\S]*\}', content)
         if json_match:
             parsed = _clean_llm_json(json_match.group())
-            lines = []
-            _format_test_node(parsed, lines, 0)
-            result = "\n".join(lines).strip()
-            if result:
-                display = result
+            if isinstance(parsed, dict) and len(parsed) >= 2:
+                is_json = True
+                lines = []
+                _format_test_node(parsed, lines, 0)
+                result = "\n".join(lines).strip()
+                if result:
+                    display = result
     except Exception as e:
         print(f"[PROMPT_TEST] 포맷 변환 실패: {e}")
 
-    return {"result": content, "formatted": display}
+    return {"result": content, "formatted": display, "is_json": is_json}
 
 
 def _format_test_node(node, lines: list, depth: int):

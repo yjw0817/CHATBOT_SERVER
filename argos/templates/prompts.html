@@ -324,9 +324,14 @@
             resultEl.style.display = 'block';
             const jsonEl = document.getElementById('test-json');
             const jsonToggle = document.getElementById('test-json-toggle');
-            jsonEl.value = data.result;
-            jsonEl.style.display = 'none';
-            jsonToggle.style.display = 'block';
+            if (data.is_json) {
+                jsonEl.value = data.result;
+                jsonEl.style.display = 'none';
+                jsonToggle.style.display = 'block';
+            } else {
+                jsonEl.style.display = 'none';
+                jsonToggle.style.display = 'none';
+            }
             status.textContent = `완료 — ${elapsed}, ${data.result.length.toLocaleString()}자`;
         } catch (e) {
             clearInterval(timer);
