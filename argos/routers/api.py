@@ -1386,16 +1386,31 @@ def _process_one_window(window_text: str, idx: int, total: int,
                 prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=window_text)
             content = call_llm(prompt, temperature=0.3)
             if not content:
-                print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
+                if attempt < max_retries - 1:
+                    wait = (attempt + 1) * 10
+                    print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
+                    _time.sleep(wait)
+                    continue
+                print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 (재시도 소진) → 원문 보존")
                 return fallback
             json_match = re.search(r'\{[\s\S]*\}', content)
             if not json_match:
-                print(f"[MANUALIZE] Window {idx + 1}: JSON 파싱 실패 → 원문 보존")
+                if attempt < max_retries - 1:
+                    wait = (attempt + 1) * 10
+                    print(f"[MANUALIZE] Window {idx + 1}: JSON 미발견 → {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
+                    _time.sleep(wait)
+                    continue
+                print(f"[MANUALIZE] Window {idx + 1}: JSON 파싱 실패 (재시도 소진) → 원문 보존")
                 return fallback
             parsed = _clean_llm_json(json_match.group())
             result = _flatten_manualize_json(parsed)
             if not result:
-                print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → 원문 보존")
+                if attempt < max_retries - 1:
+                    wait = (attempt + 1) * 10
+                    print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
+                    _time.sleep(wait)
+                    continue
+                print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 (재시도 소진) → 원문 보존")
                 return fallback
             # Inject position into all sections from this window
             for sec_data in result.values():
@@ -1405,9 +1420,9 @@ def _process_one_window(window_text: str, idx: int, total: int,
             return result
         except Exception as e:
             err_str = str(e)
-            if "429" in err_str and attempt < max_retries - 1:
+            if attempt < max_retries - 1:
                 wait = (attempt + 1) * 10
-                print(f"[MANUALIZE] Window {idx + 1}: 429 Too Many Requests → {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
+                print(f"[MANUALIZE] Window {idx + 1}: {err_str[:80]} → {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
                 _time.sleep(wait)
                 continue
             print(f"[MANUALIZE] Window {idx + 1} failed: {e} → 원문 보존")
