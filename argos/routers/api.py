@@ -1372,34 +1372,43 @@ def _process_one_window(window_text: str, idx: int, total: int,
     fallback = {fallback_name: {"text": window_text, "source_anchor": "",
                                 "source_start": start_pos, "source_end": end_pos}}
 
-    try:
-        override = _get_effective_prompt("manualize")
-        if override:
-            prompt = _safe_format(override, raw_text=window_text)
-        else:
-            prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=window_text)
-        content = call_llm(prompt, temperature=0.3)
-        if not content:
-            print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
+    import time as _time
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            override = _get_effective_prompt("manualize")
+            if override:
+                prompt = _safe_format(override, raw_text=window_text)
+            else:
+                prompt = MANUALIZE_VISUAL_INSTRUCTION + MANUALIZE_PROMPT.format(raw_text=window_text)
+            content = call_llm(prompt, temperature=0.3)
+            if not content:
+                print(f"[MANUALIZE] Window {idx + 1}: LLM 빈 응답 → 원문 보존")
+                return fallback
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if not json_match:
+                print(f"[MANUALIZE] Window {idx + 1}: JSON 파싱 실패 → 원문 보존")
+                return fallback
+            parsed = _clean_llm_json(json_match.group())
+            result = _flatten_manualize_json(parsed)
+            if not result:
+                print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → 원문 보존")
+                return fallback
+            # Inject position into all sections from this window
+            for sec_data in result.values():
+                if isinstance(sec_data, dict):
+                    sec_data["source_start"] = start_pos
+                    sec_data["source_end"] = end_pos
+            return result
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str and attempt < max_retries - 1:
+                wait = (attempt + 1) * 10
+                print(f"[MANUALIZE] Window {idx + 1}: 429 Too Many Requests → {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
+                _time.sleep(wait)
+                continue
+            print(f"[MANUALIZE] Window {idx + 1} failed: {e} → 원문 보존")
             return fallback
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if not json_match:
-            print(f"[MANUALIZE] Window {idx + 1}: JSON 파싱 실패 → 원문 보존")
-            return fallback
-        parsed = _clean_llm_json(json_match.group())
-        result = _flatten_manualize_json(parsed)
-        if not result:
-            print(f"[MANUALIZE] Window {idx + 1}: 빈 섹션 → 원문 보존")
-            return fallback
-        # Inject position into all sections from this window
-        for sec_data in result.values():
-            if isinstance(sec_data, dict):
-                sec_data["source_start"] = start_pos
-                sec_data["source_end"] = end_pos
-        return result
-    except Exception as e:
-        print(f"[MANUALIZE] Window {idx + 1} failed: {e} → 원문 보존")
-        return fallback
 
 
 def _merge_sections(all_sections: dict, new_sections: dict, idx: int) -> None:
@@ -1477,7 +1486,7 @@ def _manualize_with_window(raw_text: str, doc_id: str) -> dict:
             _manualize_progress[doc_id]["done"] = total_sections
             _manualize_progress[doc_id]["sections"] = dict(all_sections)
         else:
-            with ThreadPoolExecutor(max_workers=total_windows) as executor:
+            with ThreadPoolExecutor(max_workers=min(total_windows, 2)) as executor:
                 futures = {
                     executor.submit(_process_one_window, w_text, i, total_windows,
                                     start_pos=w_start, end_pos=w_end): i
