@@ -3596,43 +3596,80 @@ def reindex(doc_id: str):
     # Delete existing chunks
     cursor.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
     
-    chunk_size = 500
-    overlap = 100
+    MAX_CHUNK = 800   # 청크 최대 글자수 (의미 보존 위해 800)
+    MIN_CHUNK = 100   # 이보다 짧으면 이전 청크에 병합
+    OVERLAP_LINES = 2 # 청크 간 겹침: 줄 수 기준
     chunk_count = 0
-    
+
     for section in sections:
         text = section["section_text"]
         section_name = section["section_name"]
-        
-        if not text or text == "정보 없음":
-            continue
-        
-        # Simple chunking with overlap
-        start = 0
-        chunk_index = 0
-        while start < len(text):
-            end = start + chunk_size
-            chunk_text = text[start:end]
-            
-            if chunk_text.strip():
-                chunk_id = f"chunk_{uuid.uuid4().hex[:8]}"
-                # Generate embedding
-                embedding_blob = None
-                try:
-                    emb = get_embedding(chunk_text)
-                    embedding_blob = np.array(emb, dtype=np.float32).tobytes()
-                except Exception as emb_err:
-                    print(f"[REINDEX] Embedding failed for {chunk_id}: {emb_err}")
-                cursor.execute(
-                    "INSERT INTO chunks (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding_blob, datetime.now().isoformat())
-                )
-                chunk_count += 1
-                chunk_index += 1
 
-            start = end - overlap
-            if start >= len(text):
-                break
+        if not text or not text.strip() or "정보 없음" in text:
+            continue
+
+        # ── Case 1: 짧은 섹션 → 통째로 1청크 ──
+        if len(text) <= MAX_CHUNK:
+            chunk_id = f"chunk_{uuid.uuid4().hex[:8]}"
+            embedding_blob = None
+            try:
+                emb = get_embedding(text)
+                embedding_blob = np.array(emb, dtype=np.float32).tobytes()
+            except Exception as emb_err:
+                print(f"[REINDEX] Embedding failed for {chunk_id}: {emb_err}")
+            cursor.execute(
+                "INSERT INTO chunks (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (chunk_id, doc_id, section_name, 0, text, embedding_blob, datetime.now().isoformat())
+            )
+            chunk_count += 1
+            continue
+
+        # ── Case 2: 긴 섹션 → bullet/줄 경계 분할 ──
+        lines = text.split("\n")
+        line_groups = []    # list of list[str]
+        current_lines = []
+        current_len = 0
+
+        for line in lines:
+            line_len = len(line) + 1  # +1 for \n
+            if current_len + line_len <= MAX_CHUNK:
+                current_lines.append(line)
+                current_len += line_len
+            else:
+                if current_lines:
+                    line_groups.append(current_lines[:])
+                # overlap: 이전 청크의 마지막 N줄을 다음 청크 시작에 포함
+                overlap = current_lines[-OVERLAP_LINES:] if len(current_lines) >= OVERLAP_LINES else current_lines[:]
+                current_lines = overlap + [line]
+                current_len = sum(len(l) + 1 for l in current_lines)
+
+        # 마지막 그룹
+        if current_lines:
+            last_text = "\n".join(current_lines)
+            if len(last_text) < MIN_CHUNK and line_groups:
+                line_groups[-1].extend(current_lines)
+            else:
+                line_groups.append(current_lines)
+
+        # ── 청크 텍스트 생성 + DB 저장 ──
+        for ci, chunk_lines in enumerate(line_groups):
+            chunk_text = "\n".join(chunk_lines)
+            # 각 청크에 섹션 제목 prefix (검색 적중률 향상)
+            if not chunk_text.startswith("###"):
+                chunk_text = f"### {section_name} (계속)\n{chunk_text}"
+
+            chunk_id = f"chunk_{uuid.uuid4().hex[:8]}"
+            embedding_blob = None
+            try:
+                emb = get_embedding(chunk_text)
+                embedding_blob = np.array(emb, dtype=np.float32).tobytes()
+            except Exception as emb_err:
+                print(f"[REINDEX] Embedding failed for {chunk_id}: {emb_err}")
+            cursor.execute(
+                "INSERT INTO chunks (chunk_id, doc_id, section_name, chunk_index, chunk_text, embedding, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (chunk_id, doc_id, section_name, ci, chunk_text, embedding_blob, datetime.now().isoformat())
+            )
+            chunk_count += 1
 
     conn.commit()
     conn.close()
