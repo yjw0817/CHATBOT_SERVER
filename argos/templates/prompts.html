@@ -57,7 +57,11 @@
         <button onclick="doTest()" id="btn-test" style="padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;border:1px solid #fbbf24;background:#fef3c7;color:#92400e;cursor:pointer;">테스트</button>
         <span id="test-status" style="font-size:12px;color:#6b7280;margin-left:8px;"></span>
     </div>
-    <pre id="test-result" style="display:none;margin-top:0.8rem;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;font-size:12px;font-family:monospace;white-space:pre-wrap;word-break:break-word;max-height:500px;overflow-y:auto;color:#374151;"></pre>
+    <textarea id="test-result" readonly rows="15" style="display:none;margin-top:0.8rem;width:100%;border:1px solid #d1d5db;border-radius:8px;padding:12px;font-size:12px;font-family:monospace;resize:vertical;box-sizing:border-box;color:#374151;background:#f9fafb;"></textarea>
+    <div id="test-json-toggle" style="display:none;margin-top:0.4rem;">
+        <button onclick="toggleJson()" style="padding:4px 12px;border-radius:4px;font-size:11px;border:1px solid #d1d5db;background:#fff;color:#6b7280;cursor:pointer;">원본 JSON 보기</button>
+    </div>
+    <textarea id="test-json" readonly rows="15" style="display:none;margin-top:0.4rem;width:100%;border:1px solid #d1d5db;border-radius:8px;padding:12px;font-size:11px;font-family:monospace;resize:vertical;box-sizing:border-box;color:#6b7280;background:#f3f4f6;"></textarea>
 </section>
 
 <script>
@@ -316,8 +320,13 @@
                 status.textContent = `오류 (${elapsed}): ` + (data.detail || resp.statusText);
                 return;
             }
-            resultEl.textContent = data.formatted || data.result;
+            resultEl.value = data.formatted || data.result;
             resultEl.style.display = 'block';
+            const jsonEl = document.getElementById('test-json');
+            const jsonToggle = document.getElementById('test-json-toggle');
+            jsonEl.value = data.result;
+            jsonEl.style.display = 'none';
+            jsonToggle.style.display = 'block';
             status.textContent = `완료 — ${elapsed}, ${data.result.length.toLocaleString()}자`;
         } catch (e) {
             clearInterval(timer);
@@ -326,6 +335,19 @@
             btn.disabled = false;
             btn.classList.remove('test-running');
             btn.textContent = '테스트';
+        }
+    }
+
+    // ---- Toggle JSON ----
+    function toggleJson() {
+        const el = document.getElementById('test-json');
+        const btn = event.target;
+        if (el.style.display === 'none') {
+            el.style.display = 'block';
+            btn.textContent = '원본 JSON 숨기기';
+        } else {
+            el.style.display = 'none';
+            btn.textContent = '원본 JSON 보기';
         }
     }
 
