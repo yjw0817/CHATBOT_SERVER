@@ -1621,7 +1621,10 @@
         el.style.display = el.style.display === 'none' ? 'inline-flex' : 'none';
     }
 
+    let _prevLampCtx = null;  // 이전 lamp 프로세스 추적
     function _startLamp(label) {
+        // 이전 프로세스의 타이머가 남아있으면 정리
+        if (_prevLampCtx && _prevLampCtx.iv) clearInterval(_prevLampCtx.iv);
         const lamp = document.getElementById('manualize-status');
         const timerEl = document.getElementById('manualize-timer');
         if (lamp) { lamp.style.display = 'inline'; lamp.style.cssText = ''; lamp.textContent = label; }
@@ -1636,7 +1639,9 @@
                 timerEl.textContent = m > 0 ? `${m}:${sec.padStart(4,'0')}` : `${sec}s`;
             }, 100);
         }
-        return { lamp, timerEl, start, iv };
+        const ctx = { lamp, timerEl, start, iv };
+        _prevLampCtx = ctx;
+        return ctx;
     }
     function _stopLamp(ctx, resultText, isError) {
         if (ctx.iv) clearInterval(ctx.iv);
