@@ -1819,7 +1819,7 @@
 
         try {
             await saveEditor(true);
-            const { done, failed } = await _runParallel(list, 3, async (sec) => {
+            const { done, failed } = await _runParallel(list, 1, async (sec) => {
                 _markSectionWorking(sec.idx, '① 진행 중…');
                 const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
                     method: 'POST',
@@ -1864,7 +1864,7 @@
 
         try {
             await saveEditor(true);
-            const { done, failed } = await _runParallel(list, 3, async (sec) => {
+            const { done, failed } = await _runParallel(list, 1, async (sec) => {
                 _markSectionWorking(sec.idx, '② 진행 중…');
                 const res = await fetch(`/api/doc/${currentDocId}/refine-text`, {
                     method: 'POST',
@@ -1910,7 +1910,7 @@
         try {
             await saveEditor(true);
             let totalGateTime = 0;
-            const { done, failed } = await _runParallel(list, 3, async (sec) => {
+            const { done, failed } = await _runParallel(list, 1, async (sec) => {
                 _markSectionWorking(sec.idx, '③ 검증 중…');
                 const res = await fetch(`/api/doc/${currentDocId}/section/${encodeURIComponent(sec.name)}/gate`, { method: 'POST' });
                 if (res.ok) {
