@@ -486,7 +486,7 @@ async def upload_document(
     with open(file_path, "wb") as f:
         f.write(content)
     
-    raw_text = f"[Placeholder: extract text first]"
+    raw_text = ""
     
     now = datetime.now().isoformat()
     file_size = len(content)
