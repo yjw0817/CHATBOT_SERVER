@@ -78,12 +78,23 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
 # ── FAISS index management ─────────────────────────────────────────
 
 
+def _safe_filename(apt_id: str) -> str:
+    """한글 등 비ASCII apt_id를 안전한 파일명으로 변환."""
+    import hashlib
+    try:
+        apt_id.encode('ascii')
+        safe = apt_id
+    except UnicodeEncodeError:
+        safe = hashlib.md5(apt_id.encode('utf-8')).hexdigest()
+    return safe
+
+
 def _index_path(apt_id: str) -> Path:
-    return FAISS_DIR / f"{apt_id}.index"
+    return FAISS_DIR / f"{_safe_filename(apt_id)}.index"
 
 
 def _meta_path(apt_id: str) -> Path:
-    return FAISS_DIR / f"{apt_id}.meta.json"
+    return FAISS_DIR / f"{_safe_filename(apt_id)}.meta.json"
 
 
 def _load_index(apt_id: str):
